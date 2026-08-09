@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     cheap_provider: str = "openai"
     premium_model: str = "claude-sonnet-4-20250514"
     premium_provider: str = "anthropic"
+    think9_brief_provider: str = "anthropic"
+    think9_brief_model: str | None = None
+    think9_brief_fallback_to_premium: bool = True
 
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
@@ -61,6 +64,8 @@ class Settings(BaseSettings):
     precedent_boost_max: float = 0.15
     precedent_min_accuracy: float = 0.6
     precedent_min_uses: int = 3
+    finetune_holdout_fraction: float = 0.2
+    finetune_min_samples: int = 200
 
 
 @lru_cache

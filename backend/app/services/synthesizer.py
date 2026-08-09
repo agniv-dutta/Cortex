@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.envelope import ProvenanceStamp, StageName, WorkflowContext
-from app.prompts import BRIEF_SYSTEM, PROMPT_VERSION, brief_user
+from app.prompts import BRIEF_SYSTEM, PROMPT_VERSION, THINK9_BRIEF_SYSTEM, brief_user
 from app.providers.embedder import Embedder
 from app.providers.llm import LLMProvider, get_llm
 from app.schemas.brief import DraftBrief
@@ -59,10 +59,11 @@ def build_context_pack(rc: RetrievedContext, token_budget: int = 4000) -> list[d
 
 
 class DecisionSynthesizer:
-    def __init__(self, session: Session, embedder: Embedder) -> None:
+    def __init__(self, session: Session, embedder: Embedder, llm_override: LLMProvider | None = None) -> None:
         self.session = session
         self.embedder = embedder
-        self.llm: LLMProvider = get_llm("premium")
+        self.llm_override = llm_override
+        self.llm: LLMProvider = llm_override or get_llm("brief")
 
     def synthesize(
         self,
@@ -97,7 +98,11 @@ class DecisionSynthesizer:
             user += "\n\nREVISION INSTRUCTIONS (must be honored):\n- " + "\n- ".join(revision_instructions)
 
         raw = self.llm.complete(
-            BRIEF_SYSTEM, user, temperature=0.2, max_tokens=1600, json_mode=True
+            THINK9_BRIEF_SYSTEM if self.llm_override is not None else BRIEF_SYSTEM,
+            user,
+            temperature=0.2,
+            max_tokens=1600,
+            json_mode=True,
         )
         data = parse_json_object(raw)
         brief = DraftBrief.model_validate(self._normalize(data))

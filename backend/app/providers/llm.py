@@ -100,17 +100,24 @@ class AnthropicChat(LLMProvider):
         return "".join(block.text for block in resp.content if block.type == "text")
 
 
+def build_llm(provider_name: str, model: str, settings: Settings | None = None) -> LLMProvider:
+    settings = settings or get_settings()
+    if provider_name == "openai":
+        return OpenAIChat(model, settings.openai_api_key)
+    if provider_name == "anthropic":
+        return AnthropicChat(model, settings.anthropic_api_key)
+    raise ValueError(f"unknown provider: {provider_name}")
+
+
 def get_llm(tier: str, settings: Settings | None = None) -> LLMProvider:
     settings = settings or get_settings()
     if tier == "cheap":
         provider_name, model = settings.cheap_provider, settings.cheap_model
     elif tier == "premium":
         provider_name, model = settings.premium_provider, settings.premium_model
+    elif tier == "brief":
+        provider_name = settings.think9_brief_provider
+        model = settings.think9_brief_model or settings.premium_model
     else:
         raise ValueError(f"unknown tier: {tier}")
-
-    if provider_name == "openai":
-        return OpenAIChat(model, settings.openai_api_key)
-    if provider_name == "anthropic":
-        return AnthropicChat(model, settings.anthropic_api_key)
-    raise ValueError(f"unknown provider: {provider_name}")
+    return build_llm(provider_name, model, settings)

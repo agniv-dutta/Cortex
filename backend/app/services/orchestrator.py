@@ -207,12 +207,11 @@ class DecisionOrchestrator:
         )
 
         # feedback loop (feedback-loops.md §3.1): apply calibrated confidence if a model exists
-        if self.settings.expert_agents_enabled or True:
-            from app.services.feedback.calibration import calibrated_confidence
+        from app.services.feedback.calibration import calibrated_confidence
 
-            brief.recommended_action.confidence = calibrated_confidence(
-                self.session, brief.recommended_action.confidence
-            )
+        brief.recommended_action.confidence = calibrated_confidence(
+            self.session, brief.recommended_action.confidence
+        )
 
         # expert panel (expert-agents.md §1): E1 parallel assessments → E2 meta synthesis
         assessments: list[dict] = []

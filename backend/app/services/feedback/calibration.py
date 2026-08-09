@@ -29,6 +29,26 @@ def _bucket_index(confidence: float) -> int:
     return int((max(CONFIDENCE_FLOOR, min(1.0, confidence)) - CONFIDENCE_FLOOR) // BUCKET_WIDTH)
 
 
+def _monotone_non_decreasing(values: list[float]) -> list[float]:
+    """Pool-adjacent-violators: returns the isotonic (non-decreasing) fit."""
+    blocks = [[v] for v in values]
+    while True:
+        merged = False
+        for i in range(len(blocks) - 1):
+            if sum(blocks[i]) / len(blocks[i]) > sum(blocks[i + 1]) / len(blocks[i + 1]):
+                blocks[i] = blocks[i] + blocks[i + 1]
+                del blocks[i + 1]
+                merged = True
+                break
+        if not merged:
+            break
+    out: list[float] = []
+    for block in blocks:
+        mean = sum(block) / len(block)
+        out.extend([round(mean, 3)] * len(block))
+    return out
+
+
 def fit(pairs: list[tuple[float, str]]) -> dict:
     """pairs: (predicted_confidence, result). Returns a serializable payload."""
     scored = [(c, w) for c, result in pairs if (w := result_weight(result)) is not None]
@@ -51,7 +71,12 @@ def fit(pairs: list[tuple[float, str]]) -> dict:
         mid = round(CONFIDENCE_FLOOR + (idx + 0.5) * BUCKET_WIDTH, 2)
         observed = round(sum(ws) / len(ws), 3) if len(ws) >= MIN_BUCKET_SAMPLES else global_success
         points.append({"x": mid, "y": observed, "count": len(ws)})
-    return {"kind": KIND, "points": sorted(points, key=lambda p: p["x"]), "global_success": global_success, "samples": len(scored)}
+    points.sort(key=lambda p: p["x"])
+
+    ys = _monotone_non_decreasing([p["y"] for p in points])
+    for p, y in zip(points, ys):
+        p["y"] = y
+    return {"kind": KIND, "points": points, "global_success": global_success, "samples": len(scored)}
 
 
 def apply(payload: dict, confidence: float) -> float:

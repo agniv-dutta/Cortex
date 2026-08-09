@@ -1,10 +1,6 @@
 """Feedback-loop endpoints (docs/feedback-loops.md): human review, outcome-driven
 analysis, dashboard, monthly report, and model retraining."""
 
-import json
-from datetime import date
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -12,12 +8,19 @@ from app.api.deps import get_db
 from app.db.models import Decision
 from app.schemas.feedback import (
     DashboardMetrics,
+    FinetuneDatasetResponse,
+    FinetuneExportRequest,
     FinetuneExportResponse,
     MonthlyReport,
     OutcomeAnalysis,
     RetrainResponse,
     ReviewRequest,
     ReviewResponse,
+    Think9EvalRequest,
+    Think9EvalResult,
+    Think9ModelRegisterRequest,
+    Think9ModelResponse,
+    Think9ModelStatusResponse,
 )
 from app.services.feedback import (
     ConfidenceCalibrator,
@@ -25,13 +28,12 @@ from app.services.feedback import (
     OutcomeAnalyzer,
     PrecedentStatsService,
     ReportingService,
+    Think9ModelService,
     build_rows,
     export_filename,
 )
 
 router = APIRouter(tags=["feedback"])
-
-EXPORT_DIR = Path(__file__).resolve().parents[3] / "data" / "exports"
 
 
 @router.post("/decisions/{decision_id}/review", response_model=ReviewResponse)
@@ -88,10 +90,36 @@ def finetune_export(db: Session = Depends(get_db)) -> FinetuneExportResponse:
     rows = build_rows(db)
     filename = export_filename()
     preview = rows[:5]
-    try:
-        EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-        target = EXPORT_DIR / filename
-        target.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
-    except OSError as exc:  # pragma: no cover — reporting only
-        raise HTTPException(status_code=500, detail=f"export write failed: {exc}") from exc
     return FinetuneExportResponse(rows=len(rows), filename=filename, preview=preview)
+
+
+@router.post("/admin/finetune/dataset", response_model=FinetuneDatasetResponse)
+def finetune_dataset(body: FinetuneExportRequest, db: Session = Depends(get_db)) -> FinetuneDatasetResponse:
+    return Think9ModelService(db).export_dataset(
+        holdout_fraction=body.holdout_fraction,
+        min_samples=body.min_samples,
+    )
+
+
+@router.post("/admin/finetune/evaluate", response_model=Think9EvalResult)
+def finetune_evaluate(body: Think9EvalRequest, db: Session = Depends(get_db)) -> Think9EvalResult:
+    return Think9ModelService(db).evaluate(
+        mode=body.mode,
+        sample_size=body.sample_size,
+        holdout_fraction=body.holdout_fraction,
+        candidate_provider=body.candidate_provider,
+        candidate_model=body.candidate_model,
+        baseline_provider=body.baseline_provider,
+        baseline_model=body.baseline_model,
+    )
+
+
+@router.post("/admin/finetune/deploy", response_model=Think9ModelResponse)
+def finetune_deploy(body: Think9ModelRegisterRequest, db: Session = Depends(get_db)) -> Think9ModelResponse:
+    return Think9ModelService(db).register_model(body)
+
+
+@router.get("/admin/finetune/status", response_model=Think9ModelStatusResponse)
+def finetune_status(db: Session = Depends(get_db)) -> Think9ModelStatusResponse:
+    return Think9ModelService(db).status()
+

@@ -83,10 +83,28 @@ class PrecedentBoostProvider:
             .filter(PrecedentStat.used_count >= self.settings.precedent_min_uses)
             .all()
         )
-        max_boost = self.settings.precedent_boost_max
-        min_acc = self.settings.precedent_min_accuracy
         boosts: dict[str, float] = {}
         for row in rows:
-            if row.accuracy >= min_acc:
-                boosts[row.chunk_id] = round(max_boost * (row.accuracy - min_acc) / (1.0 - min_acc), 4)
+            boosts[row.chunk_id] = boost_value(
+                row.accuracy,
+                row.used_count,
+                max_boost=self.settings.precedent_boost_max,
+                min_accuracy=self.settings.precedent_min_accuracy,
+                min_uses=self.settings.precedent_min_uses,
+            )
         return boosts
+
+
+def boost_value(
+    accuracy: float,
+    used_count: int,
+    *,
+    max_boost: float = 0.15,
+    min_accuracy: float = 0.6,
+    min_uses: int = 3,
+) -> float:
+    """Non-negative ranking boost for proven-accurate precedent chunks
+    (feedback-loops.md §3.2). Zero for unproven or under-sampled chunks."""
+    if used_count < min_uses or accuracy < min_accuracy:
+        return 0.0
+    return round(max_boost * (accuracy - min_accuracy) / (1.0 - min_accuracy), 4)
