@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.db.models import Decision, DecisionBrief, Flag, Outcome
+from app.db.models import Decision, DecisionBrief, Flag
 from app.schemas.api import DecisionCreateRequest, DecisionResponse, OutcomeRequest
 from app.services.orchestrator import DecisionOrchestrator
 
@@ -46,13 +46,14 @@ def get_decision(decision_id: str, db: Session = Depends(get_db)) -> DecisionRes
 def record_outcome(decision_id: str, body: OutcomeRequest, db: Session = Depends(get_db)) -> dict:
     if db.get(Decision, decision_id) is None:
         raise HTTPException(status_code=404, detail="decision not found")
-    outcome = Outcome(
-        decision_id=decision_id,
+    from app.services.feedback import FeedbackRecorder
+
+    FeedbackRecorder().record_outcome(
+        db,
+        decision_id,
         result=body.result,
         metric_deltas=body.metric_deltas,
         narrative=body.narrative,
         recorded_by=body.recorded_by,
     )
-    db.merge(outcome)
-    db.commit()
     return {"decision_id": decision_id, "outcome_recorded": True}

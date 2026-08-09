@@ -206,9 +206,40 @@ class DecisionOrchestrator:
             recommended_action={"action": "insufficient evidence", "confidence": 0.0}
         )
 
+        # feedback loop (feedback-loops.md §3.1): apply calibrated confidence if a model exists
+        if self.settings.expert_agents_enabled or True:
+            from app.services.feedback.calibration import calibrated_confidence
+
+            brief.recommended_action.confidence = calibrated_confidence(
+                self.session, brief.recommended_action.confidence
+            )
+
+        # expert panel (expert-agents.md §1): E1 parallel assessments → E2 meta synthesis
+        assessments: list[dict] = []
+        meta_synthesis: dict | None = None
+        if self.settings.expert_agents_enabled:
+            from app.services.experts import MetaAgent, run_expert_panel
+
+            expert_assessments = run_expert_panel(envelope, qc, rc, brief, settings=self.settings)
+            meta_synthesis_obj, meta_stamp = MetaAgent().synthesize(
+                envelope, brief, expert_assessments, qc.category, refine=True
+            )
+            envelope.stamp(meta_stamp)
+            assessments = [a.model_dump() for a in expert_assessments]
+            meta_synthesis = meta_synthesis_obj.model_dump()
+            model_info["expert"] = {
+                "assessments": assessments,
+                "meta": meta_synthesis,
+                "enabled": True,
+            }
+
         # escalation
         esc, esc_stamp = self.escalation.decide(brief, validation.contradiction_flags, qc.category)
         envelope.stamp(esc_stamp)
+        if meta_synthesis and meta_synthesis.get("escalations"):
+            esc.escalate = True
+            esc.reviewer = list(dict.fromkeys(esc.reviewer + [e["to"] for e in meta_synthesis["escalations"]]))
+            esc.reason = f"{esc.reason} | expert panel escalation: {', '.join(e['reason'] for e in meta_synthesis['escalations'])}"
 
         # persist
         brief_row = DecisionBrief(
@@ -249,4 +280,6 @@ class DecisionOrchestrator:
             flags=final_flags,
             provenance=brief.provenance_chunks,
             model_info=model_info,
+            assessments=assessments,
+            meta=meta_synthesis,
         )

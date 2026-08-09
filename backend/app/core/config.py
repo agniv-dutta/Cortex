@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     # ---- app ----
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    # ---- expert agents (expert-agents.md) ----
+    expert_agents_enabled: bool = True
+    expert_parallelism: int = 5
+    expert_llm_tier: str = "premium"
+
+    # ---- feedback loops (feedback-loops.md §3.2) ----
+    precedent_boost_max: float = 0.15
+    precedent_min_accuracy: float = 0.6
+    precedent_min_uses: int = 3
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -47,6 +47,8 @@ class DecisionResponse(BaseModel):
     flags: list[dict[str, Any]] = Field(default_factory=list)
     provenance: list[str] = Field(default_factory=list)
     model_info: Optional[dict[str, Any]] = None
+    assessments: list[dict[str, Any]] = Field(default_factory=list)
+    meta: Optional[dict[str, Any]] = None
 
 
 class OutcomeRequest(BaseModel):

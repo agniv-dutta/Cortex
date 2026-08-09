@@ -16,6 +16,8 @@ class StageName(str, Enum):
     A2_RETRIEVER = "A2_retriever"
     A3_SYNTHESIZER = "A3_synthesizer"
     A4_VALIDATOR = "A4_validator"
+    E1_EXPERT_PANEL = "E1_expert_panel"
+    E2_META = "E2_meta"
     ORCHESTRATOR = "orchestrator"
 
 

@@ -15,6 +15,7 @@ Cortex/
 │   ├── ingestion-system.md              # automated ingestion + adapters
 │   ├── retrieval-system.md              # chunking, embeddings, ranking, vector DB
 │   ├── prompts.md                       # prompt specs + few-shot + settings
+│   ├── expert-agents.md                 # specialized expert panel + meta-agent
 │   ├── roadmap-mvp.md                   # 4-week build plan + success metrics
 │   └── cost-performance-analysis.md     # LLM/vector-DB economics + ROI
 └── README.md           # this file

@@ -89,6 +89,9 @@ class ContextRetriever:
 
         ranked = sorted(candidates.values(), key=lambda c: c.hybrid_score, reverse=True)
 
+        # feedback loop (feedback-loops.md §3.2): emphasize historically accurate precedents
+        self._apply_precedent_boost(ranked)
+
         # thresholds (retrieval-system.md §3.6)
         top_score = ranked[0].hybrid_score if ranked else 0.0
         ok_threshold = self.settings.retrieve_ok_threshold
@@ -111,6 +114,24 @@ class ContextRetriever:
             )
         stamp.status = StageStatus.OK.value
         return rc, stamp
+
+    def _apply_precedent_boost(self, ranked: list[ScoredChunk]) -> None:
+        """Add a non-negative accuracy boost to decision chunks with proven-good
+        outcomes (strictly zero for unproven chunks, so nothing is penalized)."""
+        try:
+            from app.services.feedback.precedent import PrecedentBoostProvider
+
+            decision_chunks = [c for c in ranked if c.doc_type == "decision"]
+            if not decision_chunks:
+                return
+            boosts = PrecedentBoostProvider(self.settings).boosts_for(
+                self.session, [c.chunk_id for c in decision_chunks]
+            )
+            for chunk in decision_chunks:
+                chunk.hybrid_score += boosts.get(chunk.chunk_id, 0.0)
+            ranked.sort(key=lambda c: c.hybrid_score, reverse=True)
+        except Exception:  # pragma: no cover — boost is an enhancement, never a blocker
+            logger.debug("precedent boost unavailable; continuing without it")
 
     def _partition(self, ranked: list[ScoredChunk], mode: str, note: str | None, queries_used: int) -> RetrievedContext:
         decisions: list[HistoricalDecision] = []

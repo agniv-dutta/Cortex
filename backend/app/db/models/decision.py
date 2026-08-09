@@ -33,6 +33,7 @@ class Decision(Base):
     requester: Mapped[str | None] = mapped_column(String(64), nullable=True)
     context_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     decided_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    review_due_at: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
