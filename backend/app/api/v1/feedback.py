@@ -21,6 +21,8 @@ from app.schemas.feedback import (
     Think9ModelRegisterRequest,
     Think9ModelResponse,
     Think9ModelStatusResponse,
+    Think9TrainRequest,
+    Think9TrainResponse,
 )
 from app.services.feedback import (
     ConfidenceCalibrator,
@@ -114,6 +116,11 @@ def finetune_evaluate(body: Think9EvalRequest, db: Session = Depends(get_db)) ->
     )
 
 
+@router.post("/admin/finetune/train", response_model=Think9TrainResponse)
+def finetune_train(body: Think9TrainRequest, db: Session = Depends(get_db)) -> Think9TrainResponse:
+    return Think9ModelService(db).train(body)
+
+
 @router.post("/admin/finetune/deploy", response_model=Think9ModelResponse)
 def finetune_deploy(body: Think9ModelRegisterRequest, db: Session = Depends(get_db)) -> Think9ModelResponse:
     return Think9ModelService(db).register_model(body)
@@ -122,4 +129,3 @@ def finetune_deploy(body: Think9ModelRegisterRequest, db: Session = Depends(get_
 @router.get("/admin/finetune/status", response_model=Think9ModelStatusResponse)
 def finetune_status(db: Session = Depends(get_db)) -> Think9ModelStatusResponse:
     return Think9ModelService(db).status()
-

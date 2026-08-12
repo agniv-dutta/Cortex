@@ -34,6 +34,11 @@ COMMON_BRAND_SIGNALS = {
 }
 
 WEATHER_RISK_TERMS = {"drought", "flood", "hurricane", "storm", "wildfire", "monsoon", "weather risk"}
+CONSOLIDATION_BLADE = {"vendor", "ingredient"}
+COORDINATION_THEMES = {"sustainability_messaging", "brand_positioning"}
+CONCENTRATION_RISK_BRAND_THRESHOLD = 5
+HIGH_PRIORITY_BRAND_THRESHOLD = 5
+EXECUTION_SCORE_THRESHOLD = 0.6
 
 
 @dataclass(slots=True)
@@ -143,22 +148,26 @@ def _severity_score(signal_kind: str, evidence: str) -> float:
 
 def _score_cluster(agg: ClusterAggregate, total_brands: int) -> float:
     brand_coverage = len(agg.brands) / max(1, total_brands)
+    brand_depth = min(1.0, len(agg.brands) / 5.0)
     breadth = min(1.0, len(agg.documents) / 6.0)
     recency = 0.5
     if agg.latest_at:
         age_days = max(0.0, (datetime.now(timezone.utc) - agg.latest_at).total_seconds() / 86400.0)
         recency = math.exp(-age_days / 180.0)
     type_mix = min(1.0, len(agg.docs_by_type) / 4.0)
-    signal_strength = min(1.0, sum(agg.signal_kinds.values()) / 5.0)
+    signal_strength = min(1.0, sum(agg.signal_kinds.values()) / 6.0)
+    repeated_signal_bonus = min(1.0, sum(count for count in agg.signal_kinds.values() if count >= 2) / 4.0)
     severity = max(agg.severities) if agg.severities else 0.0
-    shared_dependency_bonus = 0.15 if agg.dimension in {"vendor", "ingredient"} else 0.08
+    shared_dependency_bonus = 0.18 if agg.dimension in CONSOLIDATION_BLADE else 0.10 if agg.dimension == "theme" else 0.08
     score = (
-        0.22 * brand_coverage
+        0.18 * brand_coverage
+        + 0.10 * brand_depth
         + 0.18 * breadth
         + 0.18 * recency
         + 0.17 * type_mix
         + 0.15 * signal_strength
-        + 0.10 * severity
+        + 0.06 * repeated_signal_bonus
+        + 0.08 * severity
         + shared_dependency_bonus
     )
     return round(min(1.0, score), 3)
@@ -181,6 +190,8 @@ def _risk_action(dimension: str, key: str, blast_radius: int) -> tuple[str, str]
         return (f"Assess vendor concentration risk for {key}", "procurement_leads")
     if dimension == "ingredient":
         return (f"Review ingredient concentration exposure for {key}", "supply_chain_leads")
+    if dimension == "region":
+        return (f"Assess regional sourcing risk for {key}", "supply_chain_leads")
     if blast_radius >= 5:
         return ("Escalate portfolio concentration to executive review", "executive_queue")
     return (f"Flag cross-brand exposure for {key}", "risk_ops")
@@ -209,6 +220,7 @@ def _observations_from_document(doc: Document) -> list[PortfolioObservation]:
     vendor_values = _metadata_values(metadata, ("vendor", "vendors", "counterparty", "supplier", "suppliers"))
     ingredient_values = _metadata_values(metadata, ("ingredient", "ingredients", "formula", "premix"))
     theme_values = _metadata_values(metadata, ("theme", "themes", "topic", "topics"))
+    region_values = _metadata_values(metadata, ("region", "source_region", "origin", "country"))
 
     for chunk in doc.chunks:
         text = chunk.content or ""
@@ -242,6 +254,7 @@ def _observations_from_document(doc: Document) -> list[PortfolioObservation]:
                 ingredients = [extracted]
 
         themes = theme_values or list(dict.fromkeys(signal_kinds))
+        regions = region_values if "weather_risk" in signal_kinds else []
 
         for brand in brand_values:
             for vendor in vendors:
@@ -276,6 +289,22 @@ def _observations_from_document(doc: Document) -> list[PortfolioObservation]:
                         severity=_severity_score("moq_negotiation" if "moq_negotiation" in signal_kinds else "ingredient_dependency", evidence),
                     )
                 )
+            for region in regions:
+                observations.append(
+                    PortfolioObservation(
+                        document_id=doc.id,
+                        chunk_id=chunk.id,
+                        doc_type=doc.doc_type,
+                        title=doc.title,
+                        brand=brand,
+                        dimension="region",
+                        key=_title_case(region),
+                        signal_kind="weather_risk",
+                        evidence=evidence,
+                        created_at=chunk.created_at or doc.created_at,
+                        severity=_severity_score("weather_risk", evidence),
+                    )
+                )
             for theme in themes:
                 observations.append(
                     PortfolioObservation(
@@ -303,10 +332,10 @@ def _aggregate_observations(
     total_brand_count: int,
     report_type: str,
 ) -> PortfolioIntelligenceResponse:
-    grouped: dict[tuple[str, str], ClusterAggregate] = defaultdict(lambda: None)
+    grouped: dict[tuple[str, str], ClusterAggregate] = {}
     for obs in observations:
         key = (obs.dimension, obs.key)
-        if grouped.get(key) is None:
+        if key not in grouped:
             grouped[key] = ClusterAggregate(dimension=obs.dimension, key=obs.key)
         grouped[key].add(obs)
 
@@ -321,7 +350,7 @@ def _aggregate_observations(
             continue
 
         score = _score_cluster(agg, total_brand_count)
-        if score < min_score and agg.dimension not in {"vendor", "ingredient"}:
+        if score < min_score and agg.dimension not in CONSOLIDATION_BLADE and agg.dimension != "region":
             continue
 
         summary = (
@@ -330,9 +359,10 @@ def _aggregate_observations(
         )
         drivers = [f"{kind}: {count}" for kind, count in agg.signal_kinds.most_common()]
         evidence = agg.snippets[:6]
+        max_severity = max(agg.severities or [0.0])
         action, target = (
             _opportunity_action(agg.dimension, agg.key, agg.signal_kinds)
-            if max(agg.severities or [0.0]) < 0.7
+            if max_severity < 0.7
             else _risk_action(agg.dimension, agg.key, len(agg.brands))
         )
 
@@ -353,27 +383,33 @@ def _aggregate_observations(
         )
         clusters.append(cluster)
 
-        max_severity = max(agg.severities or [0.0])
-        if agg.dimension in {"vendor", "ingredient"} and max_severity < 0.7 and score >= min_score:
+        has_shared_dependency = agg.dimension in CONSOLIDATION_BLADE
+        is_coordination_theme = agg.dimension == "theme" and any(k in agg.signal_kinds for k in COORDINATION_THEMES)
+        high_brand_coverage = len(agg.brands) >= HIGH_PRIORITY_BRAND_THRESHOLD
+        concentration_risk = has_shared_dependency and len(agg.brands) >= CONCENTRATION_RISK_BRAND_THRESHOLD
+        weather_risk = agg.dimension == "region" or "weather_risk" in agg.signal_kinds
+
+        if has_shared_dependency and max_severity < 0.7 and score >= min_score:
             opportunities.append(
                 PortfolioOpportunity(
                     **cluster.model_dump(),
                     opportunity_type="consolidation" if agg.dimension == "vendor" else "bundle_moq",
                 )
             )
-            estimated_value_created += score * len(agg.brands) * 25000.0
+            value_multiplier = 30000.0 if agg.dimension == "vendor" else 22000.0
+            estimated_value_created += score * len(agg.brands) * value_multiplier
             triggers.append(
                 ExecutionTrigger(
                     trigger_id=new_id("trg"),
                     action="route_bundled_rfq",
                     target=target,
-                    priority="high" if len(agg.brands) >= 5 else "medium",
+                    priority="high" if high_brand_coverage or score >= 0.8 else "medium",
                     reason=action,
                     linked_cluster_ids=[cluster.cluster_id],
                     should_execute=True,
                 )
             )
-        elif agg.dimension == "theme" and any(k in agg.signal_kinds for k in {"sustainability_messaging", "brand_positioning"}) and score >= min_score:
+        if is_coordination_theme and score >= min_score:
             opportunities.append(
                 PortfolioOpportunity(
                     **cluster.model_dump(),
@@ -386,19 +422,19 @@ def _aggregate_observations(
                     trigger_id=new_id("trg"),
                     action="notify_brand_leads",
                     target=target,
-                    priority="medium",
+                    priority="high" if high_brand_coverage else "medium",
                     reason=action,
                     linked_cluster_ids=[cluster.cluster_id],
                     should_execute=True,
                 )
             )
 
-        if max_severity >= 0.7 or "weather_risk" in agg.signal_kinds:
+        if max_severity >= 0.7 or concentration_risk or weather_risk:
             blast_radius = len(agg.brands)
             risks.append(
                 PortfolioRisk(
                     **cluster.model_dump(),
-                    risk_type="shared_dependency_risk" if agg.dimension in {"vendor", "ingredient"} else "portfolio_trend_risk",
+                    risk_type="shared_dependency_risk" if has_shared_dependency else "weather_exposure" if weather_risk else "portfolio_trend_risk",
                     blast_radius=blast_radius,
                 )
             )
@@ -408,7 +444,7 @@ def _aggregate_observations(
                     trigger_id=new_id("trg"),
                     action="flag_portfolio_risk",
                     target=risk_target,
-                    priority="high" if blast_radius >= 5 else "medium",
+                    priority="critical" if blast_radius >= 8 or weather_risk and blast_radius >= 5 else "high" if blast_radius >= 5 else "medium",
                     reason=risk_action,
                     linked_cluster_ids=[cluster.cluster_id],
                     should_execute=True,
@@ -503,4 +539,3 @@ class PortfolioIntelligenceService:
                     ],
                 )
             )
-

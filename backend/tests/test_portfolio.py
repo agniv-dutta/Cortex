@@ -53,7 +53,16 @@ def test_bundle_moq_opportunity_is_triggered():
 
 def test_vendor_concentration_becomes_risk():
     observations = [
-        _obs(brand=f"Brand {i}", dimension="vendor", key="Vendor X", signal_kind="supplier_issue", evidence="Vendor X supplies eight brands and failure would cascade", doc_id=f"d{i}", chunk_id=f"c{i}", severity=0.9)
+        _obs(
+            brand=f"Brand {i}",
+            dimension="vendor",
+            key="Vendor X",
+            signal_kind="vendor_dependency",
+            evidence="Vendor X supplies eight brands and could create portfolio exposure if it fails",
+            doc_id=f"d{i}",
+            chunk_id=f"c{i}",
+            severity=0.4,
+        )
         for i in range(1, 9)
     ]
 
@@ -68,6 +77,35 @@ def test_vendor_concentration_becomes_risk():
     assert report.risks
     assert report.risks[0].blast_radius == 8
     assert any(trigger.action == "flag_portfolio_risk" for trigger in report.triggers)
+    assert any(opportunity.execution_target == "procurement_queue" for opportunity in report.opportunities)
+
+
+def test_weather_risk_can_aggregate_by_region():
+    observations = [
+        _obs(
+            brand=f"Brand {i}",
+            dimension="region",
+            key="India",
+            signal_kind="weather_risk",
+            evidence="Drought in India may affect raw material supply for the brands",
+            doc_id=f"r{i}",
+            chunk_id=f"rc{i}",
+            severity=0.9,
+        )
+        for i in range(1, 4)
+    ]
+
+    report = _aggregate_observations(
+        observations,
+        min_brands=3,
+        min_score=0.6,
+        total_brand_count=6,
+        report_type="monthly",
+    )
+
+    assert report.risks
+    assert report.risks[0].risk_type == "weather_exposure"
+    assert any(trigger.priority == "medium" or trigger.priority == "high" or trigger.priority == "critical" for trigger in report.triggers)
 
 
 def test_sustainability_theme_routes_to_brand_leads():
@@ -87,4 +125,3 @@ def test_sustainability_theme_routes_to_brand_leads():
     assert report.opportunities
     assert report.opportunities[0].execution_target == "brand_leads"
     assert any(trigger.target == "brand_leads" for trigger in report.triggers)
-

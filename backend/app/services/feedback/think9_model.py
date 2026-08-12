@@ -7,6 +7,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+import re
 from pathlib import Path
 from statistics import median
 
@@ -36,10 +37,13 @@ from app.schemas.feedback import (
     Think9ModelRegisterRequest,
     Think9ModelResponse,
     Think9ModelStatusResponse,
+    Think9TrainRequest,
+    Think9TrainResponse,
 )
 from app.services.synthesizer import DecisionSynthesizer
 
 ROLE = "decision_brief"
+VENDOR_RE = re.compile(r"\b(?:[Vv]endor|[Ss]upplier|[Cc]ounterparty)\s+([A-Z0-9][A-Za-z0-9&'\-]*(?:\s+[A-Z0-9][A-Za-z0-9&'\-]*){0,2})")
 
 
 def _norm(text: str) -> str:
@@ -89,6 +93,107 @@ def _lessons_learned(brief: DecisionBrief, outcome: Outcome, flags: list[Flag]) 
     if outcome.result == "success":
         lessons.append("Lesson: preserve this precedent shape for future matching.")
     return lessons[:5]
+
+
+def _unique_text(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        text = " ".join(str(value).split()).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
+def _vendor_refs(texts: list[str]) -> list[str]:
+    refs: list[str] = []
+    for text in texts:
+        for match in VENDOR_RE.finditer(text or ""):
+            refs.append(match.group(0).strip())
+    return _unique_text(refs)
+
+
+def _brief_format_score(brief: dict) -> float:
+    required = {"recommended_action", "precedents", "risk_factors", "approval_flow", "evidence_gaps", "provenance_chunks"}
+    present = sum(1 for key in required if key in brief)
+    if not brief.get("recommended_action") or not brief.get("precedents"):
+        return round(present / len(required) * 0.6, 3)
+    return round(present / len(required), 3)
+
+
+def _training_objectives() -> list[dict]:
+    return [
+        {
+            "name": "supervised_finetune",
+            "target": "Think9 decision brief JSON",
+            "scope": ["recommended_action", "precedents", "risk_factors", "approval_flow"],
+        },
+        {
+            "name": "preference_tuning",
+            "target": "match historical recommendations and prefer outcome-positive style",
+            "scope": ["action_choice", "rationale", "tradeoff_selection"],
+        },
+        {
+            "name": "domain_adaptation",
+            "target": "Think9 jargon, brand names, vendor names, and playbook references",
+            "scope": ["brand_refs", "vendor_refs", "playbook_refs"],
+        },
+    ]
+
+
+def _loss_functions() -> list[dict]:
+    return [
+        {
+            "name": "token_cross_entropy",
+            "focus": "assistant output tokens for the brief JSON",
+            "weight": 0.45,
+        },
+        {
+            "name": "structured_field_loss",
+            "focus": "required JSON keys and schema validity",
+            "weight": 0.20,
+        },
+        {
+            "name": "recommendation_alignment_loss",
+            "focus": "historical recommendation match on held-out decisions",
+            "weight": 0.20,
+        },
+        {
+            "name": "citation_grounding_penalty",
+            "focus": "unsupported claims and missing provenance",
+            "weight": 0.15,
+        },
+    ]
+
+
+def _training_plan(manifest: dict, request: Think9TrainRequest) -> dict:
+    status = "queued" if manifest.get("meets_min_samples") else "blocked"
+    return {
+        "status": status,
+        "dataset_version": manifest.get("dataset_version", ""),
+        "role": request.role,
+        "provider": request.provider,
+        "model_name": request.model_name,
+        "base_model": request.base_model,
+        "activate_on_success": request.activate_on_success,
+        "thresholds": {
+            "min_samples": request.min_samples,
+            "holdout_fraction": request.holdout_fraction,
+        },
+        "training_objectives": manifest.get("training_objectives", _training_objectives()),
+        "loss_functions": manifest.get("loss_functions", _loss_functions()),
+        "deployment_split": manifest.get("deployment_split", {}),
+    }
+
+
+def _planned_dataset_version(now: datetime | None = None) -> str:
+    current = now or datetime.now(timezone.utc)
+    return current.strftime("think9-%Y%m%d-%H%M%S")
 
 
 def _decision_instruction(decision: Decision) -> str:
@@ -144,7 +249,13 @@ def _decision_rows(session: Session) -> list[tuple[Decision, DecisionBrief, Outc
     return rows
 
 
-def build_dataset(session: Session, *, holdout_fraction: float | None = None, min_samples: int | None = None) -> tuple[list[dict], dict]:
+def build_dataset(
+    session: Session,
+    *,
+    holdout_fraction: float | None = None,
+    min_samples: int | None = None,
+    dataset_version: str | None = None,
+) -> tuple[list[dict], dict]:
     settings = get_settings()
     holdout_fraction = holdout_fraction if holdout_fraction is not None else settings.finetune_holdout_fraction
     min_samples = min_samples if min_samples is not None else settings.finetune_min_samples
@@ -162,6 +273,18 @@ def build_dataset(session: Session, *, holdout_fraction: float | None = None, mi
         else:
             holdout_rows += 1
         brief_payload = brief.brief or {}
+        provenance_chunks = list(brief_payload.get("provenance_chunks") or [])
+        retrieved_context = _chunk_context(session, provenance_chunks) if provenance_chunks else None
+        context_texts = [decision.statement, decision.context_notes or ""]
+        if retrieved_context is not None:
+            context_texts.extend(chunk.content for chunk in retrieved_context.general_context)
+            context_texts.extend(section.applies_because for section in retrieved_context.playbook_sections)
+            context_texts.extend(section.section for section in retrieved_context.playbook_sections)
+        brand_refs = _unique_text([*(decision.brands or [])])
+        vendor_refs = _vendor_refs(context_texts)
+        playbook_refs = _unique_text(
+            [f"{section.document_id}:{section.section}" for section in (retrieved_context.playbook_sections if retrieved_context else [])]
+        )
         record = {
             "instruction": _decision_instruction(decision),
             "input": {
@@ -179,7 +302,10 @@ def build_dataset(session: Session, *, holdout_fraction: float | None = None, mi
                 "brief_id": brief.id,
                 "category": decision.category,
                 "decision_class": decision.decision_class,
-                "brands": decision.brands or [],
+                "brands": brand_refs,
+                "brand_refs": brand_refs,
+                "vendor_refs": vendor_refs,
+                "playbook_refs": playbook_refs,
                 "complexity": _complexity_score(decision, brief, flags),
                 "outcome_quality": _output_quality(outcome.result),
                 "outcome": outcome.result,
@@ -194,7 +320,7 @@ def build_dataset(session: Session, *, holdout_fraction: float | None = None, mi
         rows.append(record)
 
     manifest = {
-        "dataset_version": datetime.now(timezone.utc).strftime("think9-%Y%m%d-%H%M%S"),
+        "dataset_version": dataset_version or _planned_dataset_version(),
         "role": ROLE,
         "rows": total,
         "training_rows": training_rows,
@@ -204,6 +330,13 @@ def build_dataset(session: Session, *, holdout_fraction: float | None = None, mi
         "min_samples": min_samples,
         "schema": "messages+meta+brief-output",
         "specialization": "Think9 decision brief generation",
+        "training_objectives": _training_objectives(),
+        "loss_functions": _loss_functions(),
+        "deployment_split": {
+            "decision_brief": "fine-tuned Think9 model",
+            "contradiction_detection": "base generalist model",
+            "drift_monitoring": "shared eval and weekly prompt regression checks",
+        },
     }
     return rows, manifest
 
@@ -296,6 +429,7 @@ class _EvalRun:
     action_similarity: float
     confidence_error: float
     citation_overlap: float
+    format_compliance: float
     latency_ms: float
     approx_cost_usd: float
 
@@ -412,6 +546,58 @@ class Think9ModelService:
         self.session.commit()
         return self._row_to_response(row)
 
+    def train(self, body: Think9TrainRequest) -> Think9TrainResponse:
+        dataset_version = _planned_dataset_version()
+        manifest = {
+            "dataset_version": dataset_version,
+            "role": body.role,
+            "holdout_fraction": body.holdout_fraction,
+            "min_samples": body.min_samples,
+            "meets_min_samples": True,
+            "training_objectives": _training_objectives(),
+            "loss_functions": _loss_functions(),
+            "deployment_split": {
+                "decision_brief": "fine-tuned Think9 model",
+                "contradiction_detection": "base generalist model",
+                "drift_monitoring": "shared eval and weekly prompt regression checks",
+            },
+        }
+        plan = _training_plan(manifest, body)
+        run = FineTuneRun(
+            id=new_id("ftr"),
+            role=body.role,
+            kind="train",
+            status="queued",
+            dataset_version=dataset_version,
+            samples=0,
+            payload={
+                "request": body.model_dump(),
+                "manifest": manifest,
+                "plan": plan,
+            },
+            metrics={
+                "training_rows": 0,
+                "holdout_rows": 0,
+                "meets_min_samples": None,
+            },
+        )
+        self.session.add(run)
+        self.session.commit()
+        from app.workers.tasks import train_think9_model_task
+
+        async_result = train_think9_model_task.delay(run.id, body.model_dump())
+        return Think9TrainResponse(
+            run_id=run.id,
+            task_id=getattr(async_result, "id", None),
+            status=run.status,
+            dataset_version=dataset_version,
+            samples=0,
+            training_rows=0,
+            holdout_rows=0,
+            manifest=manifest,
+            plan=plan,
+        )
+
     def status(self, role: str = ROLE) -> Think9ModelStatusResponse:
         rows = (
             self.session.query(Think9Model)
@@ -468,6 +654,7 @@ class Think9ModelService:
                     action_similarity=_similarity(cand_action, gold_action),
                     confidence_error=abs(cand_conf - gold_conf),
                     citation_overlap=(cand_citations / gold_citations) if gold_citations else 0.0,
+                    format_compliance=_brief_format_score(cand_brief),
                     latency_ms=cand_latency,
                     approx_cost_usd=round((cand_prompt_size / 4.0) * 0.000003 + 0.01, 6),
                 )
@@ -484,6 +671,7 @@ class Think9ModelService:
                     action_similarity=_similarity(base_action, gold_action),
                     confidence_error=abs(base_conf - gold_conf),
                     citation_overlap=(base_citations / gold_citations) if gold_citations else 0.0,
+                    format_compliance=_brief_format_score(base_brief),
                     latency_ms=base_latency,
                     approx_cost_usd=round((base_prompt_size / 4.0) * 0.000003 + 0.01, 6),
                 )
@@ -494,6 +682,7 @@ class Think9ModelService:
                 "recommendation_match": round(sum(r.action_similarity for r in runs) / len(runs), 3),
                 "confidence_mae": round(sum(r.confidence_error for r in runs) / len(runs), 3),
                 "citation_overlap": round(sum(r.citation_overlap for r in runs) / len(runs), 3),
+                "format_compliance": round(sum(r.format_compliance for r in runs) / len(runs), 3),
                 "latency_ms_p50": round(float(median([r.latency_ms for r in runs])), 2),
                 "latency_ms_p95": round(sorted(r.latency_ms for r in runs)[max(0, math.ceil(len(runs) * 0.95) - 1)], 2),
                 "cost_usd": round(sum(r.approx_cost_usd for r in runs), 4),
@@ -506,8 +695,30 @@ class Think9ModelService:
             "match_delta": round(candidate_summary["recommendation_match"] - baseline_summary["recommendation_match"], 3),
             "confidence_mae_delta": round(baseline_summary["confidence_mae"] - candidate_summary["confidence_mae"], 3),
             "citation_overlap_delta": round(candidate_summary["citation_overlap"] - baseline_summary["citation_overlap"], 3),
+            "format_compliance_delta": round(candidate_summary["format_compliance"] - baseline_summary["format_compliance"], 3),
             "latency_ms_delta": round(baseline_summary["latency_ms_p50"] - candidate_summary["latency_ms_p50"], 2),
             "cost_delta": round(candidate_summary["cost_usd"] - baseline_summary["cost_usd"], 4),
+            "win_rate": round(
+                sum(
+                    1
+                    for cand, base in zip(candidate_runs, baseline_runs)
+                    if (
+                        (cand.action_similarity * 0.45)
+                        + ((1.0 - cand.confidence_error) * 0.20)
+                        + (cand.citation_overlap * 0.20)
+                        + (cand.format_compliance * 0.15)
+                    )
+                    >= (
+                        (base.action_similarity * 0.45)
+                        + ((1.0 - base.confidence_error) * 0.20)
+                        + (base.citation_overlap * 0.20)
+                        + (base.format_compliance * 0.15)
+                    )
+                    for cand, base in zip(candidate_runs, baseline_runs)
+                )
+                / len(candidate_runs),
+                3,
+            ),
         }
 
         result = Think9EvalResult(

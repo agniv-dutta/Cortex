@@ -2,15 +2,18 @@
 
 from collections import defaultdict
 from datetime import date, datetime
+from statistics import mean
 
 from sqlalchemy.orm import Session
 
 from app.db.models import Decision, Outcome
+from app.db.models.feedback import FineTuneRun
 from app.schemas.feedback import (
     DashboardMetrics,
     EmergingPattern,
     MonthlyPoint,
     MonthlyReport,
+    ModelDriftReport,
     TopDecision,
 )
 from app.services.feedback.analysis import OutcomeAnalyzer, result_weight
@@ -18,6 +21,74 @@ from app.services.feedback.analysis import OutcomeAnalyzer, result_weight
 
 def _month_key(dt: datetime) -> str:
     return dt.strftime("%Y-%m")
+
+
+def _point_series(rows: list[tuple[str, float]]) -> list[MonthlyPoint]:
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for month, value in rows:
+        grouped[month].append(value)
+    return [MonthlyPoint(month=month, value=round(mean(values), 3)) for month, values in sorted(grouped.items()) if values]
+
+
+def _run_metric(run: FineTuneRun, path: tuple[str, ...], default: float = 0.0) -> float:
+    value: object = run.metrics or {}
+    for key in path:
+        if not isinstance(value, dict):
+            return default
+        value = value.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return default
+
+
+def _latest_payload(run: FineTuneRun | None) -> dict:
+    if run is None:
+        return {}
+    return {
+        "id": run.id,
+        "kind": run.kind,
+        "status": run.status,
+        "dataset_version": run.dataset_version,
+        "samples": run.samples,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "payload": run.payload or {},
+        "metrics": run.metrics or {},
+    }
+
+
+def _model_drift(runs: list[FineTuneRun]) -> ModelDriftReport:
+    eval_runs = [run for run in runs if run.kind == "eval" and run.created_at is not None]
+    if not eval_runs:
+        return ModelDriftReport()
+
+    win_rate_rows = []
+    match_delta_rows = []
+    confidence_mae_delta_rows = []
+    citation_overlap_delta_rows = []
+    format_compliance_delta_rows = []
+    for run in eval_runs:
+        month = _month_key(run.created_at)
+        win_rate_rows.append((month, _run_metric(run, ("comparison", "win_rate"))))
+        match_delta_rows.append((month, _run_metric(run, ("comparison", "match_delta"))))
+        confidence_mae_delta_rows.append((month, _run_metric(run, ("comparison", "confidence_mae_delta"))))
+        citation_overlap_delta_rows.append((month, _run_metric(run, ("comparison", "citation_overlap_delta"))))
+        format_compliance_delta_rows.append((month, _run_metric(run, ("comparison", "format_compliance_delta"))))
+
+    latest_eval = max(eval_runs, key=lambda run: run.created_at or datetime.min)
+    latest_train = max((run for run in runs if run.kind == "train" and run.created_at is not None), default=None, key=lambda run: run.created_at or datetime.min)
+    latest_deploy = max((run for run in runs if run.kind == "deploy" and run.created_at is not None), default=None, key=lambda run: run.created_at or datetime.min)
+
+    return ModelDriftReport(
+        win_rate=_point_series(win_rate_rows),
+        match_delta=_point_series(match_delta_rows),
+        confidence_mae_delta=_point_series(confidence_mae_delta_rows),
+        citation_overlap_delta=_point_series(citation_overlap_delta_rows),
+        format_compliance_delta=_point_series(format_compliance_delta_rows),
+        runs_recorded=len(runs),
+        latest_eval=_latest_payload(latest_eval),
+        latest_train=_latest_payload(latest_train),
+        latest_deploy=_latest_payload(latest_deploy),
+    )
 
 
 class ReportingService:
@@ -80,6 +151,11 @@ class ReportingService:
         month = month or date.today().strftime("%Y-%m")
         analysis = self.analyzer.analyze(self.session)
         outcomes = self.session.query(Outcome).all()
+        model_runs = (
+            self.session.query(FineTuneRun)
+            .filter(FineTuneRun.role == "decision_brief")
+            .all()
+        )
 
         # top decisions by absolute metric impact in the month
         top: list[TopDecision] = []
@@ -114,6 +190,7 @@ class ReportingService:
                 "outcomes": analysis.outcomes_recorded,
                 "calibration_error": analysis.calibration_error,
             },
+            model_drift=_model_drift(model_runs),
         )
 
     def _emerging_patterns(self, analysis) -> list[EmergingPattern]:

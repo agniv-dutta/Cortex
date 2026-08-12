@@ -66,6 +66,21 @@ class MonthlyPoint(BaseModel):
     value: float
 
 
+class ModelDriftSeries(BaseModel):
+    win_rate: list[MonthlyPoint] = Field(default_factory=list)
+    match_delta: list[MonthlyPoint] = Field(default_factory=list)
+    confidence_mae_delta: list[MonthlyPoint] = Field(default_factory=list)
+    citation_overlap_delta: list[MonthlyPoint] = Field(default_factory=list)
+    format_compliance_delta: list[MonthlyPoint] = Field(default_factory=list)
+
+
+class ModelDriftReport(ModelDriftSeries):
+    runs_recorded: int = 0
+    latest_eval: dict = Field(default_factory=dict)
+    latest_train: dict = Field(default_factory=dict)
+    latest_deploy: dict = Field(default_factory=dict)
+
+
 class DashboardMetrics(BaseModel):
     decision_velocity: list[MonthlyPoint] = Field(default_factory=list)
     accuracy_trend: list[MonthlyPoint] = Field(default_factory=list)
@@ -95,6 +110,7 @@ class MonthlyReport(BaseModel):
     emerging_patterns: list[EmergingPattern] = Field(default_factory=list)
     blind_spots: list[BlindSpot] = Field(default_factory=list)
     accuracy_summary: dict = Field(default_factory=dict)
+    model_drift: ModelDriftReport = Field(default_factory=ModelDriftReport)
 
 
 class RetrainResponse(BaseModel):
@@ -182,3 +198,26 @@ class Think9EvalResult(BaseModel):
 class Think9ModelStatusResponse(BaseModel):
     active: Optional[Think9ModelResponse] = None
     history: list[Think9ModelResponse] = Field(default_factory=list)
+
+
+class Think9TrainRequest(BaseModel):
+    role: str = "decision_brief"
+    provider: str
+    model_name: str
+    base_model: Optional[str] = None
+    holdout_fraction: float = Field(default=0.2, ge=0.05, le=0.5)
+    min_samples: int = Field(default=200, ge=10, le=10000)
+    activate_on_success: bool = False
+    notes: Optional[str] = None
+
+
+class Think9TrainResponse(BaseModel):
+    run_id: str
+    task_id: Optional[str] = None
+    status: str
+    dataset_version: str
+    samples: int = 0
+    training_rows: int = 0
+    holdout_rows: int = 0
+    manifest: dict = Field(default_factory=dict)
+    plan: dict = Field(default_factory=dict)

@@ -1,18 +1,30 @@
-"""Celery tasks — async decision brief generation (MVP Week 3, Slack ack→thread).
+"""Celery tasks - async decision brief generation and Think9 fine-tune runs.
 
 Runs outside the request cycle; opens its own DB session (engine pool shared).
 """
 
+from __future__ import annotations
+
+import json
 import logging
+from pathlib import Path
 
 from app.core.database import SessionLocal
+from app.db.models.feedback import FineTuneRun
+from app.schemas.feedback import Think9TrainRequest
 from app.schemas.portfolio import PortfolioIntelligenceRequest
+from app.services.feedback.think9_model import (
+    _planned_dataset_version,
+    _training_plan,
+    build_dataset,
+    export_filename,
+)
 from app.services.orchestrator import DecisionOrchestrator
 from app.services.portfolio import PortfolioIntelligenceService
 
-logger = logging.getLogger(__name__)
-
 from app.workers.celery_app import celery_app  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="decisions.generate_brief")
@@ -63,5 +75,64 @@ def generate_portfolio_report_task(
             )
         )
         return report.model_dump()
+    finally:
+        db.close()
+
+
+@celery_app.task(name="think9.train_model")
+def train_think9_model_task(run_id: str, request_payload: dict) -> dict:
+    db = SessionLocal()
+    try:
+        run = db.get(FineTuneRun, run_id)
+        if run is None:
+            return {"run_id": run_id, "status": "missing"}
+
+        request = Think9TrainRequest.model_validate(request_payload)
+        run.status = "running"
+        db.commit()
+
+        dataset_version = run.dataset_version or _planned_dataset_version()
+        rows, manifest = build_dataset(
+            db,
+            holdout_fraction=request.holdout_fraction,
+            min_samples=request.min_samples,
+            dataset_version=dataset_version,
+        )
+        plan = _training_plan(manifest, request)
+
+        export_dir = Path(__file__).resolve().parents[2] / "data" / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        target = export_dir / export_filename(manifest["dataset_version"])
+        target.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows), encoding="utf-8")
+
+        run.status = "completed" if manifest["meets_min_samples"] else "blocked"
+        run.dataset_version = manifest["dataset_version"]
+        run.samples = manifest["rows"]
+        run.payload = {
+            "request": request.model_dump(),
+            "manifest": manifest,
+            "plan": plan,
+            "artifact_path": str(target),
+        }
+        run.metrics = {
+            "training_rows": manifest["training_rows"],
+            "holdout_rows": manifest["holdout_rows"],
+            "meets_min_samples": manifest["meets_min_samples"],
+        }
+        db.commit()
+        return {
+            "run_id": run.id,
+            "status": run.status,
+            "dataset_version": run.dataset_version,
+            "samples": run.samples,
+            "artifact_path": str(target),
+        }
+    except Exception as exc:
+        run = db.get(FineTuneRun, run_id)
+        if run is not None:
+            run.status = "failed"
+            run.payload = {**(run.payload or {}), "error": str(exc)}
+            db.commit()
+        raise
     finally:
         db.close()

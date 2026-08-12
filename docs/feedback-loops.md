@@ -97,6 +97,46 @@ outcomes:
 snapshot. Output rows with `success`/`partial` outcomes only (positive examples),
 plus `failure` rows tagged as negative examples for preference-style tuning.
 
+### 3.4 Think9 specialized model strategy
+
+The `decision_brief` model is tuned for Think9's operator language, not generic chat.
+
+**Training data strategy**
+- Start with 200+ historical Think9 decisions that have outcome records.
+- Use a chronological split: earliest ~80% train, latest ~20% hold out.
+- Annotate every row with:
+  - `category`
+  - `brand_refs`
+  - `vendor_refs`
+  - `playbook_refs`
+  - `complexity` on a 1-5 scale
+  - `outcome_quality` (`success|partial|failure|superseded`)
+  - `lessons_learned`
+- Prefer rows where the brief has strong provenance and a known outcome.
+- Use `success` and `partial` as positive examples.
+- Use `failure` and `overridden` cases as negative or preference-ranking examples.
+
+**Loss functions**
+- `token_cross_entropy` on the final brief JSON.
+- `structured_field_loss` for schema validity and required fields.
+- `recommendation_alignment_loss` for held-out historical recommendation match.
+- `citation_grounding_penalty` for unsupported claims or missing provenance.
+- Preference tuning should rank the outcome-positive brief above the failed or overridden alternative.
+
+**Deployment split**
+- Use the fine-tuned Think9 model for decision brief generation.
+- Use the base generalist model for contradiction detection.
+- Share retrieval, calibration, and drift monitoring across both.
+- `POST /v1/admin/finetune/train` enqueues a Celery job that exports the dataset,
+  records the offline training run, and marks the run completed or blocked.
+
+**Evaluation metrics**
+- Historical recommendation match on held-out decisions.
+- Brief-format compliance and citation coverage.
+- A/B win rate versus the base model on new queries.
+- Latency p50/p95 and estimated cost per brief.
+- Drift over time: recommendation match, citation coverage, and outcome alignment by month.
+
 ### Update cadence summary
 
 | Model / data | Rebuild trigger | Interval |
@@ -104,6 +144,7 @@ plus `failure` rows tagged as negative examples for preference-style tuning.
 | `PrecedentStat` | outcome recorded, manual `POST /v1/admin/ranking/rebuild` | nightly |
 | `calibration_models` | `POST /v1/admin/calibration/retrain` | ≥50 new outcomes or monthly |
 | Fine-tune dataset | `POST /v1/admin/finetune/export` | monthly |
+| LLM train orchestration | `POST /v1/admin/finetune/train` | monthly or on-demand |
 | LLM fine-tune run | offline (CI/manual) from snapshot | monthly |
 
 ## 4. Reporting
@@ -119,6 +160,9 @@ active calibration error, precedent-use coverage.
 - **Organizational blind spots** — categories with low outcome coverage, high
   failure rate, or persistent evidence gaps, each with a suggested next step.
 - Accuracy summary + calibration trend.
+- Model drift section: fine-tuned-vs-base win rate, recommendation-match delta,
+  citation overlap, and confidence-MAE trend by month, plus the latest train /
+  eval / deploy snapshots.
 
 **Admin analysis** (`GET /v1/admin/analysis`): the raw metric tables backing both
 reports (accuracy by category, calibration buckets, precedent usefulness,
