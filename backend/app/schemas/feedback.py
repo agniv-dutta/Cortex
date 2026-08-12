@@ -120,6 +120,7 @@ class FinetuneExample(BaseModel):
     instruction: str
     input: dict = Field(default_factory=dict)
     output: dict = Field(default_factory=dict)
+    messages: list[dict] = Field(default_factory=list)
     meta: dict = Field(default_factory=dict)
 
 

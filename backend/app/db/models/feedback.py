@@ -1,9 +1,9 @@
 """Feedback-loop tables (docs/feedback-loops.md §1): review events, precedent
 accuracy stats, and versioned calibration models."""
 
-from datetime import date, datetime
+from datetime import datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 

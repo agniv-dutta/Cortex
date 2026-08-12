@@ -21,10 +21,23 @@ from app.db.models.feedback import FineTuneRun, Think9Model
 from app.prompts import THINK9_BRIEF_SYSTEM
 from app.providers.embedder import get_embedder
 from app.providers.llm import LLMProvider, build_llm
-from app.schemas.context import GeneralChunk, HistoricalDecision, PlaybookSection, QueryContext, RetrievedContext, RetrievalSummary
-from app.schemas.feedback import FinetuneDatasetResponse, FinetuneExample, Think9EvalResult, Think9ModelRegisterRequest, Think9ModelResponse, Think9ModelStatusResponse
+from app.schemas.context import (
+    GeneralChunk,
+    HistoricalDecision,
+    PlaybookSection,
+    QueryContext,
+    RetrievalSummary,
+    RetrievedContext,
+)
+from app.schemas.feedback import (
+    FinetuneDatasetResponse,
+    FinetuneExample,
+    Think9EvalResult,
+    Think9ModelRegisterRequest,
+    Think9ModelResponse,
+    Think9ModelStatusResponse,
+)
 from app.services.synthesizer import DecisionSynthesizer
-
 
 ROLE = "decision_brief"
 
@@ -299,11 +312,13 @@ def _build_llm(provider: str | None, model: str | None, fallback_tier: str) -> L
     settings = get_settings()
     if provider and model:
         return build_llm(provider, model, settings)
-    return build_llm(
-        settings.think9_brief_provider if fallback_tier == "brief" else settings.premium_provider,
-        settings.think9_brief_model or settings.premium_model if fallback_tier == "brief" else settings.premium_model,
-        settings,
-    )
+    if fallback_tier == "brief":
+        fallback_provider = settings.think9_brief_provider
+        fallback_model = settings.think9_brief_model or settings.premium_model
+    else:
+        fallback_provider = settings.premium_provider
+        fallback_model = settings.premium_model
+    return build_llm(fallback_provider, fallback_model, settings)
 
 
 def _generate_brief(session: Session, llm: LLMProvider, decision: Decision, brief: DecisionBrief, outcome: Outcome) -> tuple[dict, float]:
@@ -537,4 +552,3 @@ class Think9ModelService:
             notes=row.notes,
             created_at=row.created_at.isoformat() if row.created_at else None,
         )
-

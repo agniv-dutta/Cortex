@@ -5,11 +5,10 @@ Only decisions with recorded outcomes are scored; coverage is always reported.
 `superseded` outcomes are counted but excluded from accuracy.
 """
 
-from datetime import date
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Decision, DecisionBrief, Flag, Outcome
+from app.db.models import Decision, DecisionBrief, Outcome
 from app.schemas.feedback import (
     BlindSpot,
     CalibrationBucket,

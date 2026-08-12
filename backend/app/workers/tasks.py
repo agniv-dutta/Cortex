@@ -6,8 +6,8 @@ Runs outside the request cycle; opens its own DB session (engine pool shared).
 import logging
 
 from app.core.database import SessionLocal
-from app.services.orchestrator import DecisionOrchestrator
 from app.schemas.portfolio import PortfolioIntelligenceRequest
+from app.services.orchestrator import DecisionOrchestrator
 from app.services.portfolio import PortfolioIntelligenceService
 
 logger = logging.getLogger(__name__)

@@ -11,9 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.envelope import ProvenanceStamp, StageName, WorkflowContext
+from app.db.models.feedback import Think9Model
 from app.prompts import BRIEF_SYSTEM, PROMPT_VERSION, THINK9_BRIEF_SYSTEM, brief_user
 from app.providers.embedder import Embedder
-from app.providers.llm import LLMProvider, get_llm
+from app.providers.llm import LLMProvider, build_llm, get_llm
 from app.schemas.brief import DraftBrief
 from app.schemas.context import RetrievedContext
 from app.services.jsonutil import parse_json_object
@@ -63,7 +64,21 @@ class DecisionSynthesizer:
         self.session = session
         self.embedder = embedder
         self.llm_override = llm_override
-        self.llm: LLMProvider = llm_override or get_llm("brief")
+        active_model = (
+            self.session.query(Think9Model)
+            .filter_by(role="decision_brief", active=True)
+            .order_by(Think9Model.created_at.desc())
+            .first()
+        )
+        if llm_override is not None:
+            self.llm = llm_override
+            self.use_think9_system = True
+        elif active_model is not None:
+            self.llm = build_llm(active_model.provider, active_model.model_name, get_settings())
+            self.use_think9_system = True
+        else:
+            self.llm = get_llm("brief")
+            self.use_think9_system = False
 
     def synthesize(
         self,
@@ -98,7 +113,7 @@ class DecisionSynthesizer:
             user += "\n\nREVISION INSTRUCTIONS (must be honored):\n- " + "\n- ".join(revision_instructions)
 
         raw = self.llm.complete(
-            THINK9_BRIEF_SYSTEM if self.llm_override is not None else BRIEF_SYSTEM,
+            THINK9_BRIEF_SYSTEM if self.use_think9_system else BRIEF_SYSTEM,
             user,
             temperature=0.2,
             max_tokens=1600,

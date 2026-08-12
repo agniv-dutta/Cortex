@@ -7,13 +7,12 @@ the global success rate so a thin tail cannot distort the curve.
 """
 
 import logging
-from datetime import datetime
 
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.core.ulid import new_id
-from app.db.models import CalibrationModel, Decision, DecisionBrief, Outcome
+from app.db.models import CalibrationModel, DecisionBrief, Outcome
 from app.services.feedback.analysis import result_weight
 
 logger = logging.getLogger(__name__)
