@@ -1,12 +1,16 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { 
   DecisionBriefProps, 
+  DecisionBriefData,
+  BriefTransparencyData,
   PrecedentItem, 
   RiskItem 
 } from '../types/dashboard';
 import { mockDecisionBrief } from '../data/mockData';
 import { 
   ArrowLeft, 
+  FileText,
+  ShieldCheck,
   X, 
   Lightbulb, 
   CheckCircle2, 
@@ -14,8 +18,108 @@ import {
   Plus, 
   Minus, 
   Hourglass, 
-  ExternalLink
+  ExternalLink,
+  Info
 } from 'lucide-react';
+
+type DecisionBriefApiResponse = {
+  decision_id: string;
+  status: string;
+  confidence?: number | null;
+  brief?: {
+    recommended_action?: {
+      action?: string;
+      confidence?: number;
+      rationale?: string;
+      evidence_notes?: string;
+      alternatives?: Array<{ action?: string; tradeoff?: string }>;
+    };
+    precedents?: Array<{
+      title?: string;
+      decision_id?: string;
+      document_id?: string;
+      chunk_id?: string;
+      why_applies?: string;
+      how_applies?: string;
+      outcome?: string | null;
+      relevance?: number;
+      citation?: string;
+    }>;
+    risk_factors?: Record<string, {
+      type?: string;
+      risk?: string;
+      severity?: string;
+      likelihood?: string | null;
+      mitigation?: string | null;
+    }>;
+    approval_flow?: {
+      gates?: string[];
+      sla_hours?: number;
+      owner?: string | null;
+    };
+    evidence_gaps?: string[];
+    transparency?: BriefTransparencyData;
+  };
+  transparency?: BriefTransparencyData;
+};
+
+const normalizePercent = (value: number | undefined | null): number => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 0;
+  }
+  return value <= 1 ? Math.round(value * 100) : Math.round(value);
+};
+
+const mapApiBrief = (base: DecisionBriefData, response: DecisionBriefApiResponse): DecisionBriefData => {
+  const action = response.brief?.recommended_action;
+  const precedents = response.brief?.precedents ?? [];
+  const riskFactors = response.brief?.risk_factors ?? {};
+  const alternatives = action?.alternatives ?? [];
+  const transparency = response.transparency ?? response.brief?.transparency ?? base.transparency;
+
+  return {
+    ...base,
+    decisionId: response.decision_id || base.decisionId,
+    status: response.status || base.status,
+    confidence: normalizePercent(response.confidence ?? action?.confidence ?? base.confidence),
+    recommendation: action?.action || base.recommendation,
+    strategicNote: action?.rationale || action?.evidence_notes || base.strategicNote,
+    precedents: precedents.length > 0
+      ? precedents.map((precedent, index) => ({
+          id: precedent.decision_id || precedent.chunk_id || `${base.id}-prec-${index}`,
+          title: precedent.title || `Precedent ${index + 1}`,
+          outcome: precedent.outcome || 'Outcome unavailable',
+          keyDetail: precedent.how_applies || precedent.why_applies || 'Referenced in brief',
+          relevanceScore: normalizePercent(precedent.relevance),
+          fullDetails: [precedent.why_applies, precedent.how_applies].filter(Boolean).join(' '),
+        }))
+      : base.precedents,
+    risks: Object.values(riskFactors).length > 0
+      ? Object.values(riskFactors).map((risk, index) => ({
+          id: `${base.id}-risk-${index}`,
+          type: risk.type || `Risk ${index + 1}`,
+          description: risk.risk || 'Risk not specified',
+          severity: (risk.severity === 'critical' ? 'high' : risk.severity || 'low') as 'high' | 'medium' | 'low',
+          mitigation: risk.mitigation || undefined,
+        }))
+      : base.risks,
+    alternatives: alternatives.length > 0
+      ? alternatives.map((alternative, index) => ({
+          id: `${base.id}-alt-${index}`,
+          action: alternative.action || `Alternative ${index + 1}`,
+          pros: alternative.tradeoff ? [alternative.tradeoff] : [],
+          cons: [],
+        }))
+      : base.alternatives,
+    approvalRequiredFrom:
+      response.brief?.approval_flow?.gates?.length
+        ? response.brief.approval_flow.gates
+        : response.brief?.approval_flow?.owner
+          ? [response.brief.approval_flow.owner]
+          : base.approvalRequiredFrom,
+    transparency,
+  };
+};
 
 export const DecisionBrief: React.FC<DecisionBriefProps> = ({
   brief = mockDecisionBrief,
@@ -24,6 +128,11 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
   onBack,
   onClose,
 }) => {
+  const [resolvedBrief, setResolvedBrief] = useState<DecisionBriefData>(brief);
+  const [resolvedTransparency, setResolvedTransparency] = useState<BriefTransparencyData | undefined>(brief.transparency);
+  const [briefLoading, setBriefLoading] = useState(false);
+  const [transparencyLoading, setTransparencyLoading] = useState(false);
+
   // State for expanded precedent card
   const [expandedPrecedentId, setExpandedPrecedentId] = useState<string | null>(null);
   
@@ -33,10 +142,70 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
   // State feedback toast for button actions
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
 
+  useEffect(() => {
+    setResolvedBrief(brief);
+    setResolvedTransparency(brief.transparency);
+  }, [brief.id, brief.transparency]);
+
+  useEffect(() => {
+    if (!brief.decisionId) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let mounted = true;
+
+    const loadTransparency = async () => {
+      setBriefLoading(true);
+      setTransparencyLoading(true);
+      try {
+        const response = await fetch(`/v1/decisions/${brief.decisionId}`, {
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data = await response.json() as DecisionBriefApiResponse;
+
+        if (mounted) {
+          setResolvedBrief(mapApiBrief(brief, data));
+          setResolvedTransparency(data.transparency ?? data.brief?.transparency ?? brief.transparency);
+        }
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') {
+          console.warn('Failed to load decision transparency', error);
+        }
+      } finally {
+        if (mounted) {
+          setBriefLoading(false);
+          setTransparencyLoading(false);
+        }
+      }
+    };
+
+    void loadTransparency();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [brief.decisionId, brief.transparency]);
+
   const handleApprove = () => {
+    const approvedAt = new Date().toISOString();
     setActionFeedback('Approval submitted successfully!');
     if (onApprove) {
-      onApprove();
+      onApprove({
+        briefId: resolvedBrief.id,
+        decisionId: resolvedBrief.decisionId,
+        title: resolvedBrief.title,
+        category: 'Decision Brief',
+        brands: [],
+        confidence: resolvedBrief.confidence,
+        approvedAt,
+      });
     }
     setTimeout(() => setActionFeedback(null), 3500);
   };
@@ -56,6 +225,34 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
   const toggleRisk = (id: string) => {
     setExpandedRiskId(prev => prev === id ? null : id);
   };
+
+  const retrievedDocuments = resolvedTransparency?.retrievedDocuments ?? resolvedBrief.precedents.slice(0, 3).map((precedent) => ({
+    id: precedent.id,
+    title: precedent.title,
+    source: precedent.date ? `Historical decision · ${precedent.date}` : 'Historical decision',
+    relevanceScore: precedent.relevanceScore,
+    explanation: precedent.fullDetails || precedent.outcome,
+    note: `Relevant because it shares the same vendor and negotiation pattern.`,
+  }));
+
+  const confidenceReasoning = resolvedTransparency?.confidenceReasoning ?? [
+    {
+      summary: 'Confidence is grounded in similar historical precedent.',
+      detail: resolvedBrief.precedents[0]
+        ? `${resolvedBrief.precedents[0].title} had ${resolvedBrief.precedents[0].relevanceScore}% match strength and informed the recommendation.`
+        : 'No confidence explanation was supplied.',
+    },
+  ];
+
+  const playbookChecks = resolvedTransparency?.playbookChecks ?? [
+    {
+      check: 'No playbook checks provided',
+      passed: false,
+      detail: 'Transparency metadata was not supplied for this brief.',
+    },
+  ];
+
+  const missingData = resolvedTransparency?.missingData ?? [];
 
   const getSeverityBadge = (severity: 'high' | 'medium' | 'low') => {
     switch (severity) {
@@ -124,12 +321,12 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
 
           <div>
             <h1 className="text-xl lg:text-2xl font-bold tracking-tight text-[#1F2937]">
-              {brief.title}
+              {resolvedBrief.title}
             </h1>
             <p className="text-xs sm:text-sm font-medium text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
-              <span>{brief.querySubmittedAt}</span>
+              <span>{resolvedBrief.querySubmittedAt}</span>
               <span>&bull;</span>
-              <span>{brief.generatedAt}</span>
+              <span>{resolvedBrief.generatedAt}</span>
             </p>
           </div>
         </div>
@@ -168,22 +365,146 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
             {/* Confidence Badge (Top-Right) */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100/90 border border-emerald-300 text-emerald-800 text-xs font-bold w-fit">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>{brief.confidence}% Confidence</span>
+              <span>{resolvedBrief.confidence}% Confidence</span>
             </div>
           </div>
 
           {/* Large Recommendation Text */}
           <p className="text-base sm:text-lg font-semibold text-slate-900 leading-relaxed mb-4">
-            {brief.recommendation}
+            {resolvedBrief.recommendation}
           </p>
 
           {/* Inner Strategic Note Card */}
-          {brief.strategicNote && (
+          {resolvedBrief.strategicNote && (
             <div className="bg-white/90 rounded-xl p-4 border border-amber-200/90 text-xs sm:text-sm text-slate-700 leading-relaxed">
               <span className="font-bold text-slate-900">Strategic Note: </span>
-              {brief.strategicNote.replace('Strategic Note:', '').trim()}
+              {resolvedBrief.strategicNote.replace('Strategic Note:', '').trim()}
             </div>
           )}
+        </section>
+
+        {/* 2b. Transparency / Audit Trail */}
+        <section className="space-y-4" aria-labelledby="transparency-heading">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 id="transparency-heading" className="text-base font-bold text-[#1F2937] tracking-tight flex items-center gap-2">
+                <Info className="w-4 h-4 text-amber-600" />
+                Reasoning Transparency
+              </h3>
+              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                This view shows the evidence Lens used, why it mattered, which policy checks passed, and what data is still missing.
+              </p>
+            </div>
+            <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-[11px] font-bold uppercase tracking-wider border border-slate-200">
+              {briefLoading || transparencyLoading ? 'Refreshing...' : 'Audit Ready'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+            <div className="xl:col-span-5 space-y-4">
+              <div className="rounded-2xl border border-gray-200 bg-white p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-amber-600" />
+                    <h4 className="text-sm font-bold text-slate-900">Top 3 Retrieved Documents</h4>
+                  </div>
+                  <span className="text-[11px] font-semibold text-slate-400">Used in recommendation</span>
+                </div>
+
+                <div className="space-y-3">
+                  {retrievedDocuments.slice(0, 3).map((doc) => (
+                    <div key={doc.id} className="rounded-xl border border-gray-200 bg-slate-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-900">{doc.title}</p>
+                          <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                            {doc.source}
+                          </p>
+                        </div>
+                        <span className="shrink-0 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-800">
+                          {doc.relevanceScore}% relevance
+                        </span>
+                      </div>
+                      <p className="mt-3 text-xs leading-5 text-slate-600">
+                        {doc.explanation}
+                      </p>
+                      {doc.note && (
+                        <p className="mt-2 text-[11px] font-medium text-slate-500">
+                          {doc.note}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="xl:col-span-4 space-y-4">
+              <div className="rounded-2xl border border-gray-200 bg-white p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <h4 className="text-sm font-bold text-slate-900">LLM Confidence Reasoning</h4>
+                </div>
+
+                <div className="space-y-3">
+                  {confidenceReasoning.map((item, index) => (
+                    <div key={index} className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-4">
+                      <p className="text-sm font-semibold text-slate-900">{item.summary}</p>
+                      <p className="mt-1.5 text-xs leading-5 text-slate-600">{item.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-gray-200 bg-white p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <ShieldCheck className="w-4 h-4 text-amber-700" />
+                  <h4 className="text-sm font-bold text-slate-900">Playbook Checks Performed</h4>
+                </div>
+
+                <div className="space-y-2.5">
+                  {playbookChecks.map((check, index) => (
+                    <div key={index} className={`rounded-xl border p-3.5 ${check.passed ? 'border-emerald-200 bg-emerald-50/60' : 'border-rose-200 bg-rose-50/70'}`}>
+                      <div className="flex items-start gap-2">
+                        <CheckCircle2 className={`w-4 h-4 mt-0.5 ${check.passed ? 'text-emerald-600' : 'text-rose-600'}`} />
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{check.check}</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-600">{check.detail}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="xl:col-span-3">
+              <div className="rounded-2xl border border-gray-200 bg-white p-5 h-full">
+                <div className="flex items-center gap-2 mb-4">
+                  <AlertTriangle className="w-4 h-4 text-amber-600" />
+                  <h4 className="text-sm font-bold text-slate-900">Missing Data</h4>
+                </div>
+
+                {missingData.length > 0 ? (
+                  <div className="space-y-3">
+                    {missingData.map((item, index) => (
+                      <div key={index} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">{item.label}</p>
+                        <p className="mt-1.5 text-sm font-medium leading-6 text-slate-700">{item.detail}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+                    <p className="text-sm font-semibold text-slate-900">No major evidence gaps detected.</p>
+                    <p className="mt-1.5 text-xs leading-5 text-slate-600">
+                      All required evidence sources were present for this recommendation.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </section>
 
         {/* 3. Two-Column Grid: Precedents + Risks */}
@@ -193,13 +514,13 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
           <div className="lg:col-span-7 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-[#1F2937] tracking-tight">
-                {brief.precedents.length} Similar Decisions
+                {resolvedBrief.precedents.length} Similar Decisions
               </h3>
               <span className="text-xs text-slate-400 font-medium">Click to inspect</span>
             </div>
 
             <div className="space-y-3">
-              {brief.precedents.map((item: PrecedentItem, index: number) => {
+              {resolvedBrief.precedents.map((item: PrecedentItem, index: number) => {
                 const isExpanded = expandedPrecedentId === item.id;
                 return (
                   <div
@@ -274,7 +595,7 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
             </div>
 
             <div className="space-y-3">
-              {brief.risks.map((risk: RiskItem) => {
+              {resolvedBrief.risks.map((risk: RiskItem) => {
                 const isExpanded = expandedRiskId === risk.id;
                 return (
                   <div
@@ -324,7 +645,7 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
         </div>
 
         {/* 4. Alternatives Section (De-emphasized) */}
-        {brief.alternatives && brief.alternatives.length > 0 && (
+        {resolvedBrief.alternatives && resolvedBrief.alternatives.length > 0 && (
           <section className="space-y-3" aria-labelledby="alternatives-heading">
             <h3 
               id="alternatives-heading"
@@ -334,7 +655,7 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
             </h3>
 
             <div className="bg-slate-50/80 border border-gray-200/90 rounded-2xl p-5 lg:p-6 space-y-4">
-              {brief.alternatives.map((alt) => (
+              {resolvedBrief.alternatives.map((alt) => (
                 <div key={alt.id} className="space-y-3">
                   <h4 className="text-sm font-bold text-slate-900">
                     {alt.action}
@@ -377,6 +698,42 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
           </section>
         )}
 
+        {/* 4. Outcome Learning Loop */}
+        <section className="space-y-4" aria-labelledby="learning-loop-heading">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 id="learning-loop-heading" className="text-base font-bold text-[#1F2937] tracking-tight">
+                Outcome Learning Loop
+              </h3>
+              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                Phase 4 capability: approved decisions are logged, reviewed after 30 days, and fed back into calibration, retrieval ranking, and fine-tuning.
+              </p>
+            </div>
+            <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold uppercase tracking-wider border border-amber-200">
+              Phase 4
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="rounded-2xl border border-gray-200 bg-white p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">1. Log approval</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">Capture reviewer, rationale, brands, and decision metadata at approval time.</p>
+            </div>
+            <div className="rounded-2xl border border-gray-200 bg-white p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">2. 30-day check</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">Revisit actual results after 30 days to record savings, risk avoided, or misses.</p>
+            </div>
+            <div className="rounded-2xl border border-gray-200 bg-white p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">3. Calibrate confidence</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">Retrain scoring on historical accuracy so confidence gets sharper over time.</p>
+            </div>
+            <div className="rounded-2xl border border-gray-200 bg-white p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">4. Rank better precedents</p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">Promote high-accuracy precedents and feed real Think9 decisions into monthly fine-tunes.</p>
+            </div>
+          </div>
+        </section>
+
         {/* 5. Next Steps & Approval Flow Action Footer */}
         <section className="bg-slate-50 border border-gray-200 rounded-2xl p-5 lg:p-6 flex flex-col md:flex-row items-center justify-between gap-5">
           <div className="flex items-center gap-3.5 w-full md:w-auto">
@@ -388,7 +745,7 @@ export const DecisionBrief: React.FC<DecisionBriefProps> = ({
                 STATUS
               </span>
               <p className="text-xs sm:text-sm font-semibold text-slate-800">
-                Awaiting approval from: {brief.approvalRequiredFrom.join(', ')}
+                Awaiting approval from: {resolvedBrief.approvalRequiredFrom.join(', ')}
               </p>
             </div>
           </div>

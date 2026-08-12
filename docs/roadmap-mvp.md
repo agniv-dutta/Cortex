@@ -37,16 +37,16 @@ This is the build plan for a **4-week MVP**, assuming **2–3 full-time engineer
 
 ---
 
-## 2. Roadmap Overview (4 weeks)
+## 2. Roadmap Overview (4 weeks + Phase 4)
 
 ```
-        W1              W2              W3              W4
-FOUNDATIONS       INGEST+RAG        BRIEFS+UI        SLACK+ANALYTICS
-─────────────────┬─────────────────┬─────────────────┬────────────
-schema+taxonomy   ingestion mocks   brief generation  Slack bot
-vector DB setup   chunking+embed    contradiction     analytics dash
-sample dataset    retrieval + API   confidence+esc    perf+optimization
-[par: data]       [par: API/UI]     web UI            docs + demo
+        W1              W2              W3              W4              Phase 4
+FOUNDATIONS       INGEST+RAG        BRIEFS+UI        SLACK+ANALYTICS  MULTI-BRAND
+─────────────────┬─────────────────┬─────────────────┬────────────┬────────────
+schema+taxonomy   ingestion mocks   brief generation  Slack bot      Decision Aggregation
+vector DB setup   chunking+embed    contradiction     analytics dash Pattern Detection
+sample dataset    retrieval + API   confidence+esc    perf+optimization Bundled RFQ
+[par: data]       [par: API/UI]     web UI            docs + demo   Monthly Reports
 ```
 
 ---
@@ -187,3 +187,253 @@ sample dataset    retrieval + API   confidence+esc    perf+optimization
 
 ## 5. Definition of Done (overall MVP)
 - The 90-doc corpus is live; `/think9 brief` returns a cited, flagged, confidence-scored brief; Slack + web both work; contradiction and evidence-gap paths demonstrable; analytics show usage + cost; all 4 week-exit metrics green.
+
+---
+
+## Phase 4 — Multi-Brand Pattern Detection (2 weeks)
+
+**Enhancement:** Detect multi-brand patterns and opportunities across the portfolio, moving from individual query responses to cross-portfolio intelligence.
+
+### Business Value
+- **Multiplies savings across brands** through consolidation opportunities
+- **Shows Think9 coordination strength** by identifying portfolio-level patterns
+- **Reduces concentration risk** by flagging vendor/ingredient dependencies
+- **Enables strategic coordination** for messaging and sustainability initiatives
+
+### Example Patterns Detected
+- "Brands A, B, C all negotiating pasta ingredients in Q3 → bundle MOQ, 20% discount"
+- "8 brands depend on Vendor X → if they fail, portfolio is exposed → diversify"
+- "All 5 home care brands pivoting to sustainability → coordinate messaging"
+
+### Tasks
+- [ ] **Decision aggregation agent** — Scan incoming decisions for multi-brand patterns (vendors, ingredients, themes)
+- [ ] **Pattern detection logic** — Identify consolidation opportunities (bundled RFQs, MOQ) and concentration risks
+- [ ] **Execution triggers** — Route bundled RFQs to procurement, flag risks to appropriate teams
+- [ ] **Monthly report generation** — "Cross-portfolio value created: $2.1M" with cluster analysis
+- [ ] **API endpoints** — `GET /v1/portfolio/decisions/scan`, `GET /v1/portfolio/decisions/monthly-report`
+- [ ] **Background workers** — Celery tasks for automatic decision scanning and monthly reporting
+- [ ] **Integration with existing portfolio intelligence** — Extend document-based analysis to include decision-based patterns
+
+### Tech Stack
+| Layer | Choice |
+|-------|--------|
+| Pattern detection | `DecisionAggregationService` in `app/services/decision_aggregation.py` |
+| Signal extraction | Keyword-based + named entity extraction from decision statements |
+| Scoring algorithm | Multi-factor: brand coverage, recency, signal strength, severity |
+| Execution triggers | Extended `ExecutionTrigger` schema with bundled RFQ routing |
+| Background jobs | Celery tasks: `decisions.scan_patterns`, `decisions.monthly_report` |
+| API | FastAPI endpoints in `app/api/v1/portfolio.py` |
+
+### Signal Categories
+| Signal | Detection Pattern | Action |
+|--------|------------------|--------|
+| Vendor negotiation | "vendor", "supplier", "renegotiate", "renewal" | Bundle RFQ |
+| Ingredient sourcing | "ingredient", "formula", "premix", "sourcing" | Bundle MOQ |
+| MOQ negotiation | "MOQ", "minimum order quantity", "volume commitment" | Bundle procurement |
+| Pricing pressure | "price increase", "discount", "volume discount" | Coordinate response |
+| Sustainability | "sustainability", "eco", "recyclable", "green" | Coordinate messaging |
+| Brand positioning | "positioning", "messaging", "brand voice" | Align guidance |
+
+### Scoring Algorithm
+Cluster scores consider:
+- **Brand coverage** (0-1): Fraction of total brands affected
+- **Brand depth** (0-1): Number of brands (capped at 5 for full score)
+- **Breadth** (0-1): Number of decisions (capped at 6 for full score)
+- **Recency** (0-1): Exponential decay over 90 days (decisions are time-sensitive)
+- **Class mix** (0-1): Diversity of decision classes involved
+- **Signal strength** (0-1): Number of signal hits (capped at 4 for full score)
+- **Severity** (0-1): Maximum severity score in cluster
+- **Shared dependency bonus** (0.20 for vendors/ingredients, 0.12 for themes)
+
+### Execution Triggers
+| Trigger Type | Target | Priority | Condition |
+|--------------|--------|----------|-----------|
+| `route_bundled_rfq` | procurement_queue | high/medium | Vendor/ingredient cluster, severity < 0.7 |
+| `notify_brand_leads` | brand_leads | high/medium | Theme cluster (sustainability/positioning) |
+| `flag_portfolio_risk` | risk_ops/executive_queue | critical/high | Severity ≥ 0.7 or concentration risk ≥ 5 brands |
+
+### API Endpoints
+```python
+# Scan recent decisions for patterns
+GET /v1/portfolio/decisions/scan?since_days=30&min_brands=2&min_score=0.6
+
+# Generate monthly cross-portfolio value report
+GET /v1/portfolio/decisions/monthly-report?month=8&year=2026
+```
+
+### Background Tasks
+```python
+# Automatic decision scanning (scheduled)
+celery -A app.workers.tasks call decisions.scan_patterns --kwargs='{"since_days": 30}'
+
+# Monthly report generation (scheduled)
+celery -A app.workers.tasks call decisions.monthly_report --kwargs='{"month": 8, "year": 2026}'
+```
+
+### Success Metrics (Phase 4 exit criteria)
+- [ ] Pattern detection identifies ≥ 3 consolidation opportunities in test dataset
+- [ ] Monthly report generates with estimated value calculation
+- [ ] Execution triggers route to correct targets (procurement, brand leads, risk ops)
+- [ ] API endpoints return sub-500ms for typical queries
+- [ ] Background workers complete pattern scans in < 30s for 1000 decisions
+- [ ] Test script demonstrates all three example patterns from requirements
+
+### Integration Points
+- **Existing portfolio intelligence** — Extends `PortfolioIntelligenceService` to include decision-based patterns
+- **Decision model** — Uses `Decision` table with brands, statement, context_notes for signal extraction
+- **Alert system** — Persists triggers to `Alert` table for Slack/notification routing
+- **Analytics** — Monthly reports feed into cross-portfolio value metrics
+
+### Testing
+- Test script: `backend/scripts/test_decision_aggregation.py`
+- Seeds sample decisions representing:
+  - Vendor consolidation (3+ brands negotiating with same vendor)
+  - Ingredient bundling (2+ brands sourcing same ingredient)
+  - Sustainability coordination (5+ brands pivoting to green messaging)
+  - Concentration risk (8+ brands depending on single vendor)
+
+---
+
+## Phase 4 — Scenario Simulation (2 weeks)
+
+**Enhancement:** Enable executives to ask "What if" scenarios for strategic planning, moving from actual decisions to counterfactual analysis.
+
+### Business Value
+- **Strategic planning becomes data-driven** through scenario simulation
+- **Reduces decision risk** by showing historical precedents and outcome probabilities
+- **Enables financial impact analysis** before committing to decisions
+- **Provides quantitative confidence** through probability estimates
+
+### Example Scenarios
+- "If we increase Vendor X's MOQ to 50K, what's our exposure?"
+- "What if we raise prices by 15% across all brands?"
+- "What if we switch to Supplier Y for raw materials?"
+
+### Tasks
+- [ ] **Scenario simulation service** — Counterfactual reasoning engine for "What if" analysis
+- [ ] **Financial impact simulation** — Calculate cash flow, margin, working capital impacts
+- [ ] **Historical analogue matching** — Find similar past decisions with outcomes
+- [ ] **Outcome probability estimation** — Estimate likelihood of different outcomes
+- [ ] **Counterfactual reasoning prompts** — Extended LLM prompts for scenario analysis
+- [ ] **API endpoints** — `POST /v1/scenarios/simulate` for scenario queries
+- [ ] **Financial model integration** — Link to financial models (if available)
+
+### Tech Stack
+| Layer | Choice |
+|-------|--------|
+| Scenario service | `ScenarioSimulationService` in `app/services/scenario_simulation.py` |
+| Counterfactual prompts | Extended LLM prompts with scenario-specific context |
+| Financial simulation | Heuristic calculations + financial model integration points |
+| Historical matching | Retrieval service with scenario-specific query building |
+| Probability estimation | Statistical analysis of historical outcomes |
+| API | FastAPI endpoint in `app/api/v1/scenarios.py` |
+
+### Scenario Types
+| Type | Parameters | Analysis Focus |
+|------|------------|----------------|
+| `pricing` | price_change_percent, brands | Revenue, margin, volume impact |
+| `vendor` | moq_quantity, vendor, current_terms | Working capital, supply risk, discount impact |
+| `supply` | current_supplier, new_supplier, material | Lead time, cost, quality risk |
+| `capacity` | capacity_change, production_lines | Fulfillment, utilization, capex |
+| `financial` | investment_amount, time_horizon | ROI, payback period, cash flow |
+| `strategic` | market_change, competitive_response | Market share, positioning, risk |
+
+### Analysis Components
+
+#### Financial Impact Analysis
+- **Impact types**: revenue, cost, margin, cash flow, working capital
+- **Magnitude**: Quantified with units ($, %, basis points)
+- **Confidence**: 0-1 score based on data availability
+- **Drivers**: Key factors influencing the impact
+
+#### Risk Impact Analysis
+- **Risk types**: supply, vendor, market, operational, financial
+- **Severity**: low, medium, high, critical
+- **Likelihood**: low, medium, high
+- **Mitigation**: Suggested strategies when applicable
+
+#### Historical Analogues
+- **Similarity scoring**: 0-1 based on decision context
+- **Outcome tracking**: success, partial, failure, mixed
+- **Key factors**: What made the decision similar
+- **Lessons learned**: Takeaways from historical outcomes
+
+#### Outcome Probabilities
+- **Probability distribution**: Different possible outcomes with likelihoods
+- **Confidence intervals**: Bounds on probability estimates
+- **Rationale**: Why each probability is assigned
+
+### API Endpoint
+```python
+POST /v1/scenarios/simulate
+{
+  "question": "If we increase Vendor X's MOQ to 50K, what's our exposure?",
+  "scenario_type": "vendor",
+  "parameters": {
+    "moq_quantity": 50000,
+    "current_moq": 25000,
+    "vendor": "Vendor X"
+  },
+  "brands": ["Brand A", "Brand B", "Brand C"],
+  "time_horizon": "1y",
+  "include_financials": true,
+  "include_risk": true
+}
+```
+
+### Response Structure
+```python
+{
+  "scenario_id": "scn_...",
+  "question": "...",
+  "scenario_type": "vendor",
+  "summary": "Executive summary of analysis",
+  "financial_impacts": [...],
+  "risk_impacts": [...],
+  "historical_analogues": [...],
+  "outcome_probabilities": [...],
+  "recommendations": [...],
+  "confidence": 0.75,
+  "assumptions": [...],
+  "data_sources": [...],
+  "model_info": {...}
+}
+```
+
+### Counterfactual Reasoning Prompt
+The LLM prompt includes:
+- Scenario question and type
+- Scenario-specific parameters
+- Time horizon context
+- Retrieved historical decisions with outcomes
+- Structured analysis requirements
+- Confidence and uncertainty requirements
+
+### Success Metrics (Phase 4 exit criteria)
+- [ ] Scenario analysis returns structured financial and risk impacts
+- [ ] Historical analogues achieve similarity scores ≥ 0.6 for relevant cases
+- [ ] Outcome probabilities are grounded in historical outcomes
+- [ ] API endpoint returns sub-2s for typical scenario queries
+- [ ] Test script demonstrates all three example scenarios
+- [ ] Confidence scores correlate with human expert assessment
+
+### Integration Points
+- **Retrieval service** — Fetches relevant historical decisions for context
+- **Decision model** — Uses past decisions with outcomes as analogues
+- **LLM provider** — Extended prompts for counterfactual reasoning
+- **Financial models** — Integration points for quantitative analysis (future enhancement)
+
+### Testing
+- Test script: `backend/scripts/test_scenario_simulation.py`
+- Tests three core scenarios:
+  - Vendor MOQ increase (working capital impact, supply risk)
+  - Pricing increase (revenue, margin, volume impact)
+  - Supplier switch (cost, lead time, quality risk)
+- Seeds historical decisions with known outcomes for analogue matching
+
+### Future Enhancements
+- **Financial model integration** — Connect to ERP/financial planning systems
+- **Monte Carlo simulation** — Probabilistic modeling for complex scenarios
+- **Sensitivity analysis** — Identify key drivers and break-even points
+- **Scenario comparison** — Compare multiple scenarios side-by-side
+- **Scenario library** — Save and reuse common scenario templates

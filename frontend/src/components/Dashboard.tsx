@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import type { DashboardProps, NavigationItem, DecisionItem } from '../types/dashboard';
+import React, { useEffect, useMemo, useState } from 'react';
+import type { DashboardProps, NavigationItem, DecisionItem, DecisionBriefData, PlaybookCategory, PlaybookItem } from '../types/dashboard';
 import { Sidebar } from './Sidebar';
 import { TopNav } from './TopNav';
 import { HeroSection } from './HeroSection';
@@ -14,7 +14,8 @@ import {
   mockStatsData, 
   mockRecentQueries, 
   mockDecisions,
-  mockDecisionBrief 
+  mockDecisionBrief,
+  mockPlaybooksData
 } from '../data/mockData';
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -31,7 +32,64 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
   const [selectedDecision, setSelectedDecision] = useState<DecisionItem | null>(null);
   const [showBriefView, setShowBriefView] = useState<boolean>(false);
+  const [selectedBrief, setSelectedBrief] = useState<DecisionBriefData | null>(null);
   const [activeSearch, setActiveSearch] = useState<string>('');
+  const [playbooksData, setPlaybooksData] = useState<PlaybookItem[]>(mockPlaybooksData);
+  const [decisionsData, setDecisionsData] = useState<DecisionItem[]>(decisions);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadDecisions = async () => {
+      try {
+        const response = await fetch('/v1/decisions');
+        if (!response.ok) {
+          throw new Error(`Decisions fetch failed: ${response.status}`);
+        }
+
+        const data = (await response.json()) as DecisionItem[];
+        if (!cancelled && data.length > 0) {
+          setDecisionsData(data);
+        }
+      } catch {
+        if (!cancelled) {
+          setDecisionsData(decisions);
+        }
+      }
+    };
+
+    const loadPlaybooks = async () => {
+      try {
+        const response = await fetch('/v1/playbooks');
+        if (!response.ok) {
+          throw new Error(`Playbooks fetch failed: ${response.status}`);
+        }
+
+        const data = (await response.json()) as PlaybookItem[];
+        if (!cancelled && data.length > 0) {
+          setPlaybooksData(data);
+        }
+      } catch {
+        if (!cancelled) {
+          setPlaybooksData(mockPlaybooksData);
+        }
+      }
+    };
+
+    void loadDecisions();
+    void loadPlaybooks();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [decisions]);
+
+  const playbookFilters = useMemo(() => {
+    return {
+      brands: Array.from(new Set(playbooksData.flatMap((playbook) => playbook.brands))),
+      categories: ['Vendor Management', 'Brand Strategy', 'Product Development', 'Operations'] as PlaybookCategory[],
+    };
+  }, [playbooksData]);
 
   const handleNavigation = (path: NavigationItem) => {
     setActiveNav(path);
@@ -54,9 +112,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const handleDecisionSelect = (item: DecisionItem) => {
     setSelectedDecision(item);
+    setSelectedBrief({
+      id: `brief-${item.id}`,
+      decisionId: item.id,
+      title: item.title,
+      querySubmittedAt: 'Loaded from live decision feed',
+      generatedAt: 'Opening live decision brief...',
+      recommendation: item.description || 'Loading live recommendation...',
+      confidence: item.confidence,
+      precedents: [],
+      risks: [],
+      alternatives: [],
+      approvalRequiredFrom: item.category ? [item.category] : [],
+      status: item.status,
+    });
+    setShowBriefView(true);
     if (externalOnSelectDecision) {
       externalOnSelectDecision(item);
     }
+  };
+
+  const openFeaturedBrief = () => {
+    const item = selectedDecision ?? decisionsData[0];
+    if (!item) {
+      return;
+    }
+    handleDecisionSelect(item);
   };
 
   return (
@@ -87,10 +168,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
             /* Decision Brief Dedicated View */
             <div className="animate-in fade-in slide-in-from-bottom-2 duration-200">
               <DecisionBrief
-                brief={mockDecisionBrief}
+                brief={selectedBrief ?? mockDecisionBrief}
                 onBack={() => setShowBriefView(false)}
-                onClose={() => setShowBriefView(false)}
-                onApprove={() => console.log('Decision Brief Approved')}
+                onClose={() => {
+                  setShowBriefView(false);
+                }}
+                onApprove={(metadata) => console.log('Decision Brief Approved', metadata)}
                 onRequestInfo={() => console.log('Request info triggered')}
               />
             </div>
@@ -102,7 +185,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
           ) : activeNav === 'playbooks' ? (
             /* Playbooks Browser Module */
             <div className="animate-in fade-in duration-200">
-              <PlaybooksBrowser />
+              <PlaybooksBrowser
+                playbooks={playbooksData}
+                filters={playbookFilters}
+              />
             </div>
           ) : activeNav === 'dashboard' ? (
             <>
@@ -113,10 +199,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <span>Active query filter: <strong>"{activeSearch}"</strong></span>
                     <div className="flex items-center gap-3">
                       <button 
-                        onClick={() => setShowBriefView(true)}
-                        className="text-xs font-bold text-amber-900 bg-amber-200/80 px-2.5 py-1 rounded-lg hover:bg-amber-300 transition-colors"
-                      >
-                        View Decision Brief &rarr;
+                      onClick={openFeaturedBrief}
+                      className="text-xs font-bold text-amber-900 bg-amber-200/80 px-2.5 py-1 rounded-lg hover:bg-amber-300 transition-colors"
+                    >
+                      View Decision Brief &rarr;
                       </button>
                       <button 
                         onClick={() => setActiveSearch('')}
@@ -142,7 +228,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
 
                   <button
-                    onClick={() => setShowBriefView(true)}
+                    onClick={openFeaturedBrief}
                     className="px-4.5 py-2 rounded-xl bg-white text-amber-800 text-xs sm:text-sm font-bold hover:bg-amber-50 transition-all shadow-xs active:scale-95"
                   >
                     Open Decision Brief &rarr;
@@ -163,12 +249,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <ActivityFeed
                 decisions={
                   activeSearch 
-                    ? decisions.filter(d => d.title.toLowerCase().includes(activeSearch.toLowerCase()) || d.category?.toLowerCase().includes(activeSearch.toLowerCase()))
-                    : decisions
+                    ? decisionsData.filter(d => d.title.toLowerCase().includes(activeSearch.toLowerCase()) || d.category?.toLowerCase().includes(activeSearch.toLowerCase()))
+                    : decisionsData
                 }
                 onSelectDecision={(item) => {
                   handleDecisionSelect(item);
-                  setShowBriefView(true);
                 }}
               />
             </>
@@ -205,10 +290,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </main>
 
         {/* Modal for Decision Detail View */}
-        <DecisionDetailModal
-          decision={selectedDecision}
-          onClose={() => setSelectedDecision(null)}
-        />
+        {!showBriefView && (
+          <DecisionDetailModal
+            decision={selectedDecision}
+            onClose={() => setSelectedDecision(null)}
+          />
+        )}
 
         {/* Footer */}
         <footer className="w-full py-4 px-8 border-t border-gray-200/60 text-center text-xs text-slate-400 font-medium">

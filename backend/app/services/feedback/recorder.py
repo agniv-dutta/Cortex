@@ -12,7 +12,7 @@ from app.services.feedback.precedent import PrecedentStatsService
 
 logger = logging.getLogger(__name__)
 
-OUTCOME_REVIEW_MONTHS = 6
+OUTCOME_REVIEW_DAYS = 30
 
 
 class FeedbackRecorder:
@@ -47,14 +47,14 @@ class FeedbackRecorder:
         if action == "approved":
             decision.status = "approved"
             decision.decided_at = date.today()
-            decision.review_due_at = date.today() + timedelta(days=OUTCOME_REVIEW_MONTHS * 30)
+            decision.review_due_at = date.today() + timedelta(days=OUTCOME_REVIEW_DAYS)
         elif action == "rejected":
             decision.status = "rejected"
             decision.decided_at = date.today()
         elif action == "overridden":
             decision.status = "approved"
             decision.decided_at = date.today()
-            decision.review_due_at = date.today() + timedelta(days=OUTCOME_REVIEW_MONTHS * 30)
+            decision.review_due_at = date.today() + timedelta(days=OUTCOME_REVIEW_DAYS)
 
         session.commit()
         logger.info("decision %s %s by %s", decision_id, action, reviewer or "unknown")

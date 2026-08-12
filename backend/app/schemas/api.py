@@ -4,6 +4,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.transparency import DecisionTransparency
+
 
 class QueryRequest(BaseModel):
     question: str = Field(min_length=3, max_length=4000)
@@ -39,6 +41,18 @@ class DecisionCreateRequest(BaseModel):
     requester: Optional[str] = None
 
 
+class DecisionListItem(BaseModel):
+    id: str
+    title: str
+    status: str
+    confidence: float = 0.0
+    owner: str = ""
+    date: str = ""
+    category: Optional[str] = None
+    description: Optional[str] = None
+    impactScore: Optional[str] = None
+
+
 class DecisionResponse(BaseModel):
     decision_id: str
     status: str
@@ -49,6 +63,7 @@ class DecisionResponse(BaseModel):
     model_info: Optional[dict[str, Any]] = None
     assessments: list[dict[str, Any]] = Field(default_factory=list)
     meta: Optional[dict[str, Any]] = None
+    transparency: Optional[DecisionTransparency] = None
 
 
 class OutcomeRequest(BaseModel):

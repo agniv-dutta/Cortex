@@ -1,15 +1,16 @@
 """Feedback-loop tests (docs/feedback-loops.md): outcome math, confidence
 calibration fit/apply, and the precedent ranking boost."""
 
+from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
+
+from app.schemas.feedback import Think9TrainRequest
 from app.services.feedback.analysis import accuracy_of, result_weight
 from app.services.feedback.calibration import apply, fit
 from app.services.feedback.precedent import boost_value
+from app.services.feedback.recorder import FeedbackRecorder
 from app.services.feedback.reporting import _model_drift
 from app.services.feedback.think9_model import Think9ModelService, _training_plan
-from app.schemas.feedback import Think9TrainRequest
-
-from datetime import datetime, timezone
-from types import SimpleNamespace
 
 
 def test_result_weight():
@@ -70,6 +71,62 @@ def test_boost_value_gating():
 def test_boost_value_never_negative():
     assert boost_value(accuracy=0.0, used_count=0) >= 0.0
     assert boost_value(accuracy=0.99, used_count=99) >= 0.0
+
+
+def test_record_review_sets_30_day_followup():
+    class FakeDecision:
+        def __init__(self) -> None:
+            self.status = "draft"
+            self.decided_at = None
+            self.review_due_at = None
+
+    class FakeBrief:
+        id = "brief-1"
+
+    class FakeQuery:
+        def filter_by(self, **_kwargs):
+            return self
+
+        def order_by(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return FakeBrief()
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.decision = FakeDecision()
+            self.items = []
+            self.commits = 0
+
+        def get(self, model, decision_id):
+            if model.__name__ == "Decision" and decision_id == "dec-1":
+                return self.decision
+            return None
+
+        def query(self, *_args, **_kwargs):
+            return FakeQuery()
+
+        def add(self, item) -> None:
+            self.items.append(item)
+
+        def commit(self) -> None:
+            self.commits += 1
+
+    session = FakeSession()
+    event = FeedbackRecorder().record_review(
+        session,
+        "dec-1",
+        action="approved",
+        reviewer="Sarah Jenkins",
+        reason="Looks good",
+    )
+
+    assert event.action == "approved"
+    assert session.decision.status == "approved"
+    assert session.decision.decided_at == date.today()
+    assert session.decision.review_due_at == date.today() + timedelta(days=30)
+    assert session.commits == 1
 
 
 def test_training_plan_marks_threshold_state():

@@ -23,9 +23,11 @@ from app.providers.llm import get_llm
 from app.schemas.api import Citation, DecisionResponse, QueryResponse
 from app.schemas.brief import DraftBrief
 from app.schemas.context import RetrievedContext
+from app.schemas.transparency import DecisionTransparency, MissingDataItem
 from app.services.escalation import EscalationService
 from app.services.retriever import ContextRetriever
 from app.services.router import QueryRouter
+from app.services.transparency import build_transparency_from_retrieval
 from app.services.synthesizer import DecisionSynthesizer, build_context_pack
 from app.services.validator import ValidationAgent
 
@@ -165,10 +167,19 @@ class DecisionOrchestrator:
         if rc.retrieval_summary.mode == "empty":
             decision.status = "pending_review"
             self.session.commit()
+            transparency = DecisionTransparency(
+                missingData=[
+                    MissingDataItem(
+                        label="Retrieval empty",
+                        detail="No strong evidence matched this decision. The brief was marked pending review.",
+                    )
+                ]
+            )
             return DecisionResponse(
                 decision_id=decision.id, status=decision.status,
                 brief={"evidence_gap": [g.description for g in rc.evidence_gaps]},
                 confidence=0.0,
+                transparency=transparency,
             )
 
         # revision loop (agentic-workflow.md §5): A3 ⇄ A4, bounded
@@ -241,10 +252,14 @@ class DecisionOrchestrator:
             esc.reason = f"{esc.reason} | expert panel escalation: {', '.join(e['reason'] for e in meta_synthesis['escalations'])}"
 
         # persist
+        transparency = build_transparency_from_retrieval(self.session, rc, brief, validation)
+        brief_payload = brief.model_dump()
+        brief_payload["transparency"] = transparency.model_dump()
+
         brief_row = DecisionBrief(
             id=new_id("brf"),
             decision_id=decision.id,
-            brief=brief.model_dump(),
+            brief=brief_payload,
             confidence=brief.recommended_action.confidence,
             model_info=model_info,
             status="pending_review" if (verdict == "escalate" or esc.escalate) else "draft",
@@ -274,11 +289,12 @@ class DecisionOrchestrator:
         return DecisionResponse(
             decision_id=decision.id,
             status=decision.status,
-            brief=brief.model_dump(),
+            brief=brief_payload,
             confidence=brief.recommended_action.confidence,
             flags=final_flags,
             provenance=brief.provenance_chunks,
             model_info=model_info,
             assessments=assessments,
             meta=meta_synthesis,
+            transparency=transparency,
         )

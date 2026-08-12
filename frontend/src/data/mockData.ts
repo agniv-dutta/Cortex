@@ -168,6 +168,70 @@ export const mockDecisionBrief: DecisionBriefData = {
   ],
   approvalRequiredFrom: ['VP Supply Chain', 'Finance Lead'],
   status: 'Awaiting approval',
+  transparency: {
+    retrievedDocuments: [
+      {
+        id: 'doc-1',
+        title: 'Supplier Y negotiation (Feb 2024)',
+        source: 'Historical decision',
+        relevanceScore: 92,
+        explanation: 'Closest match on MOQ, payment terms, and supplier flexibility. The approved outcome improved cost without sacrificing quality.',
+        note: '91% historical accuracy on similar procurement decisions',
+      },
+      {
+        id: 'doc-2',
+        title: 'Brand Coffee Co. sourcing policy',
+        source: 'Playbook',
+        relevanceScore: 88,
+        explanation: 'Provides the active guardrails for payment terms, vendor onboarding, and approval thresholds.',
+        note: 'Complies with active vendor policy',
+      },
+      {
+        id: 'doc-3',
+        title: 'Vendor Z renewal postmortem',
+        source: 'Outcome review',
+        relevanceScore: 81,
+        explanation: 'Relevant because it documents the downside of pushing too hard on price and losing flexibility in the contract.',
+      },
+    ],
+    confidenceReasoning: [
+      {
+        summary: 'High confidence because the closest historical match was approved and had strong outcome accuracy.',
+        detail: 'Similar decision in Feb 2024 had 91% accuracy and produced measurable savings, which increases confidence in the current recommendation.',
+      },
+      {
+        summary: 'Confidence is reduced slightly by missing region-specific risk data.',
+        detail: 'We do not yet have recent supply chain telemetry for the target region, so the model avoids over-committing on execution details.',
+      },
+    ],
+    playbookChecks: [
+      {
+        check: 'Complies with Brand A vendor policy',
+        passed: true,
+        detail: 'Payment-term guidance and MOQ handling stay within the approved Brand A procurement guardrails.',
+      },
+      {
+        check: 'Vendor negotiation threshold reviewed',
+        passed: true,
+        detail: 'The recommendation stays under the escalation threshold for procurement approval.',
+      },
+      {
+        check: 'Cross-check against active SLA policy',
+        passed: true,
+        detail: 'The recommendation preserves SLA protections and does not relax service penalties.',
+      },
+    ],
+    missingData: [
+      {
+        label: 'Supply chain risk',
+        detail: 'No recent supply chain risk data for the target region.',
+      },
+      {
+        label: 'Vendor capacity',
+        detail: 'Latest vendor capacity figures were not present in the retrieved evidence set.',
+      },
+    ],
+  },
 };
 
 export const mockSearchTemplates: QueryTemplateItem[] = [
